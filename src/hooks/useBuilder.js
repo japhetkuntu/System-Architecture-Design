@@ -243,11 +243,15 @@ function hexLight(hex) {
 
 // ---- Mermaid builder (pure) --------------------------------------------
 export function buildMermaid({ components, mergedEdges, allTypes, layoutDir = 'LR', useSubgraphs = true }) {
+  // Init directive — keeps the diagram airy in any renderer (live view, ADR
+  // preview, exported markdown), not just our own DiagramView.
+  const initDirective = `%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 70, "rankSpacing": 90, "padding": 20, "diagramPadding": 24, "htmlLabels": true, "useMaxWidth": false}} }%%`;
+
   if (!components.length) {
-    return `flowchart ${layoutDir}\n  empty["Add components from the palette to see your diagram"]`;
+    return `${initDirective}\nflowchart ${layoutDir}\n  empty["Add components from the palette to see your diagram"]`;
   }
 
-  const lines = [`flowchart ${layoutDir}`];
+  const lines = [initDirective, `flowchart ${layoutDir}`];
 
   const used = new Set();
   const idMap = {};

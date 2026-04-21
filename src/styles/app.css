@@ -296,15 +296,22 @@ textarea:focus, select:focus, input:focus {
 }
 
 .diagram-scroll {
-  overflow-x: auto;
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 16px;
+  padding: 24px;
   background: #fff;
-  min-height: 300px;
+  min-height: 360px;
+  max-height: 80vh;
 }
 
-.diagram-svg svg { max-width: none; height: auto; }
+.diagram-svg { display: block; min-width: 100%; }
+.diagram-svg svg { max-width: none; height: auto; display: block; margin: 0 auto; }
+/* Give subgraph clusters a touch more breathing room */
+.diagram-svg .cluster rect { rx: 8; ry: 8; }
+.diagram-svg .cluster .cluster-label,
+.diagram-svg .cluster-label { font-weight: 600; }
+.diagram-svg .edgeLabel { background: #fff; padding: 2px 4px; border-radius: 4px; }
 
 .diagram-error {
   background: var(--error-bg);

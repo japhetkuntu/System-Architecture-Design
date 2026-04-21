@@ -33,7 +33,15 @@ export default function DiagramView({
         startOnLoad: false,
         theme: 'neutral',
         fontFamily: 'system-ui',
-        flowchart: { curve: 'basis', htmlLabels: true, useMaxWidth: false }
+        flowchart: {
+          curve: 'basis',
+          htmlLabels: true,
+          useMaxWidth: false,
+          nodeSpacing: 70,      // horizontal gap between sibling nodes
+          rankSpacing: 90,      // gap between ranks (rows / columns)
+          padding: 20,          // padding around each node
+          diagramPadding: 24    // padding around the whole diagram
+        }
       });
       initialized = true;
     }

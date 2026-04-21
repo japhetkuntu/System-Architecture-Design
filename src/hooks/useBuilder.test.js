@@ -36,8 +36,8 @@ describe('buildMermaid', () => {
     const merged = [];
     const mmdLR = buildMermaid({ components: comps, mergedEdges: merged, allTypes: t, layoutDir: 'LR' });
     const mmdTB = buildMermaid({ components: comps, mergedEdges: merged, allTypes: t, layoutDir: 'TB' });
-    expect(mmdLR).toMatch(/^flowchart LR/);
-    expect(mmdTB).toMatch(/^flowchart TB/);
+    expect(mmdLR).toMatch(/flowchart LR/);
+    expect(mmdTB).toMatch(/flowchart TB/);
   });
 
   it('emits subgraphs when useSubgraphs is true and omits them when false', () => {
