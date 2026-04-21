@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { supabase, supabaseConfigured } from '../lib/supabaseClient.js';
 
 const STATE_KEY     = 'archivise:state:v1';
 const BASELINE_KEY  = 'archivise:baseline:v1';
 const DOCS_KEY      = 'archivise:docs:v1';
 const ACTIVE_DOC_KEY = 'archivise:active-doc:v1';
 const SETTINGS_KEY  = 'archivise:settings:v1';
+const CLOUD_KEY     = 'archivise:cloud-id:v1';
+const PROJECT_KEY   = 'archivise:project-id:v1';
+const CLOUD_TABLE   = 'architectures';
+const PROJECT_TABLE = 'projects';
 
 const MAX_HISTORY = 60;
 
@@ -27,6 +32,137 @@ function saveJson(key, value) {
     if (value === null || value === undefined) window.localStorage.removeItem(key);
     else window.localStorage.setItem(key, JSON.stringify(value));
   } catch { /* ignore quota */ }
+}
+
+async function loadRemoteArchitecture(id) {
+  if (!id) throw new Error('Missing cloud architecture ID');
+  if (!supabase) throw new Error('Supabase is not configured');
+  console.log('[Supabase] loadRemoteArchitecture', { id });
+  const { data, error } = await supabase
+    .from(CLOUD_TABLE)
+    .select('id, title, payload, project_id')
+    .eq('id', id)
+    .single();
+  if (error) {
+    console.error('[Supabase] loadRemoteArchitecture error', error);
+    throw error;
+  }
+  console.log('[Supabase] loadRemoteArchitecture success', { id: data?.id, title: data?.title });
+  return data;
+}
+
+async function saveRemoteArchitecture(id, payload, projectId) {
+  if (!payload) throw new Error('Missing payload');
+  if (!supabase) throw new Error('Supabase is not configured');
+  console.log('[Supabase] saveRemoteArchitecture start', { id, projectId, payload: { title: payload.title, components: payload.components?.length, connections: payload.connections?.length } });
+  const row = { title: payload.title, payload, project_id: projectId || null };
+  if (id) {
+    const { data, error } = await supabase
+      .from(CLOUD_TABLE)
+      .upsert({ id, ...row }, { onConflict: 'id' })
+      .select()
+      .single();
+    if (error) {
+      console.error('[Supabase] upsert error', error);
+      throw error;
+    }
+    console.log('[Supabase] upsert success', { id: data.id });
+    return data.id;
+  }
+  const { data, error } = await supabase
+    .from(CLOUD_TABLE)
+    .insert(row)
+    .select()
+    .single();
+  if (error) {
+    console.error('[Supabase] insert error', error);
+    throw error;
+  }
+  console.log('[Supabase] insert success', { id: data.id });
+  return data.id;
+}
+
+async function listRemoteArchitectures({ limit = 100, projectId } = {}) {
+  if (!supabase) throw new Error('Supabase is not configured');
+  console.log('[Supabase] listRemoteArchitectures', { projectId });
+  let query = supabase
+    .from(CLOUD_TABLE)
+    .select('id, title, payload, project_id, updated_at, created_at')
+    .order('updated_at', { ascending: false })
+    .limit(limit);
+  if (projectId === null) query = query.is('project_id', null);
+  else if (projectId) query = query.eq('project_id', projectId);
+  const { data, error } = await query;
+  if (error) {
+    console.error('[Supabase] list error', error);
+    throw error;
+  }
+  return (data || []).map((r) => ({
+    id: r.id,
+    title: r.title,
+    projectId: r.project_id || null,
+    updatedAt: r.updated_at || r.created_at,
+    componentCount: r.payload?.components?.length || 0,
+    connectionCount: r.payload?.connections?.length || 0
+  }));
+}
+
+async function deleteRemoteArchitecture(id) {
+  if (!supabase) throw new Error('Supabase is not configured');
+  const { error } = await supabase.from(CLOUD_TABLE).delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function listRemoteProjects() {
+  if (!supabase) throw new Error('Supabase is not configured');
+  const { data, error } = await supabase
+    .from(PROJECT_TABLE)
+    .select('id, name, description, created_at, updated_at')
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.error('[Supabase] listProjects error', error);
+    throw error;
+  }
+  return data || [];
+}
+
+async function createRemoteProject({ name, description }) {
+  if (!supabase) throw new Error('Supabase is not configured');
+  if (!name || !name.trim()) throw new Error('Project name is required');
+  const { data, error } = await supabase
+    .from(PROJECT_TABLE)
+    .insert({ name: name.trim(), description: description || null })
+    .select()
+    .single();
+  if (error) {
+    console.error('[Supabase] createProject error', error);
+    throw error;
+  }
+  return data;
+}
+
+async function renameRemoteProject(id, name) {
+  if (!supabase) throw new Error('Supabase is not configured');
+  const { error } = await supabase
+    .from(PROJECT_TABLE)
+    .update({ name: name.trim() })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+async function deleteRemoteProject(id) {
+  if (!supabase) throw new Error('Supabase is not configured');
+  const { error } = await supabase.from(PROJECT_TABLE).delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function moveRemoteArchitectureToProject(id, projectId) {
+  if (!supabase) throw new Error('Supabase is not configured');
+  const { error } = await supabase
+    .from(CLOUD_TABLE)
+    .update({ project_id: projectId || null })
+    .eq('id', id);
+  if (error) throw error;
 }
 
 // ---- Default component types --------------------------------------------
@@ -597,6 +733,211 @@ export function runLints({ components, connections }) {
   return lints;
 }
 
+// ---- Resilience / durability assessment (pure) --------------------------
+// A heuristic, opinionated review that surfaces likely failure modes a
+// senior architect would flag in a design review. Each finding has a
+// severity, a category, a short message, and a concrete recommendation.
+export function assessResilience({ components, connections, allTypes }) {
+  const findings = [];
+  if (!components.length) {
+    return { findings, score: null, grade: 'N/A', summary: 'Add components to get an assessment.' };
+  }
+
+  const types = allTypes || DEFAULT_TYPES;
+  const byId = new Map(components.map((c) => [c.id, c]));
+  const typeOf = (id) => types[byId.get(id)?.type]?.label || byId.get(id)?.type || '';
+  const groupOf = (id) => types[byId.get(id)?.type]?.group || '';
+  const hasGroup = (g) => components.some((c) => types[c.type]?.group === g);
+  const hasTypeKey = (k) => components.some((c) => c.type === k);
+  const countType = (k) => components.filter((c) => c.type === k).length;
+
+  const outDegree = new Map(components.map((c) => [c.id, 0]));
+  const inDegree  = new Map(components.map((c) => [c.id, 0]));
+  connections.forEach((e) => {
+    outDegree.set(e.fromId, (outDegree.get(e.fromId) || 0) + 1);
+    inDegree.set(e.toId,  (inDegree.get(e.toId)  || 0) + 1);
+  });
+
+  const add = (severity, category, message, recommendation, componentId = null) =>
+    findings.push({ severity, category, message, recommendation, componentId });
+
+  // --- Single points of failure ------------------------------------------
+  // Anything other than the entry edge with a fan-in/fan-out > 4 and no
+  // peer of the same type is a likely SPOF.
+  components.forEach((c) => {
+    const fanIn  = inDegree.get(c.id)  || 0;
+    const fanOut = outDegree.get(c.id) || 0;
+    const peers = components.filter((x) => x.type === c.type).length;
+    if ((fanIn + fanOut) >= 4 && peers === 1 && c.type !== 'user') {
+      add('warn', 'Availability',
+        `"${c.name}" looks like a single point of failure (fan-in ${fanIn}, fan-out ${fanOut}, no peer of the same type).`,
+        `Run at least two instances behind a load balancer, or document why a single instance is acceptable.`,
+        c.id);
+    }
+  });
+
+  // --- Edge / front door --------------------------------------------------
+  const hasFrontend = hasGroup('Clients');
+  const hasGateway  = hasTypeKey('apigateway') || hasTypeKey('loadbalancer') || hasTypeKey('edge');
+  if (hasFrontend && !hasGateway) {
+    add('warn', 'Edge',
+      'Clients appear to talk directly to backend services with no gateway, load balancer, or CDN in between.',
+      'Put an API gateway or load balancer at the front door for TLS termination, throttling, and routing.');
+  }
+
+  // --- Security -----------------------------------------------------------
+  const hasIdp = hasTypeKey('idp');
+  const hasBackend = hasGroup('Backend');
+  if (hasBackend && !hasIdp) {
+    add('warn', 'Security',
+      'No identity provider is shown. Authentication and authorization are implicit.',
+      'Add an IDP (e.g., Cognito, Auth0, Okta) and label which services authenticate via it.');
+  }
+  const hasSecrets = hasTypeKey('secrets');
+  if (hasBackend && !hasSecrets) {
+    add('info', 'Security',
+      'No secrets manager / KMS in the diagram.',
+      'Show how credentials and keys are stored (Secrets Manager / KMS / Vault) so reviewers can audit handling.');
+  }
+
+  // --- Observability ------------------------------------------------------
+  const hasTelemetry = hasTypeKey('telemetry');
+  if (!hasTelemetry && components.length >= 4) {
+    add('warn', 'Observability',
+      'No telemetry / metrics component is present.',
+      'Add a telemetry node (CloudWatch, Datadog, OpenTelemetry collector) and connect critical services to it with the “observes” edge.');
+  } else if (hasTelemetry) {
+    const observed = new Set(connections.filter((c) => c.kind === 'observes').map((c) => c.toId));
+    const criticalGroups = new Set(['Backend', 'Data', 'Edge', 'Temporal']);
+    const unobserved = components.filter((c) => criticalGroups.has(types[c.type]?.group || '') && !observed.has(c.id));
+    if (unobserved.length >= 3) {
+      add('info', 'Observability',
+        `${unobserved.length} critical components have no “observes” edge into telemetry.`,
+        'Wire every backend, data, edge, and orchestration component to telemetry so you can detect failures.');
+    }
+  }
+
+  // --- Data: backups / replication ---------------------------------------
+  const databases = components.filter((c) => ['database', 'warehouse', 'storage'].includes(c.type));
+  databases.forEach((db) => {
+    const hasReplica = connections.some((e) => e.fromId === db.id && e.kind === 'replicates');
+    if (!hasReplica) {
+      add('warn', 'Durability',
+        `"${db.name}" has no replication target. Loss of this datastore = data loss.`,
+        'Add a read replica / cross-region replica with the “replicates to” edge, and document RPO/RTO.',
+        db.id);
+    }
+  });
+
+  // --- Caching in front of slow stores -----------------------------------
+  const hasCache = hasTypeKey('cache');
+  const heavyReadDb = databases.some((db) =>
+    connections.some((e) => e.toId === db.id && (e.kind === 'reads' || e.kind === 'queries'))
+  );
+  if (heavyReadDb && !hasCache) {
+    add('info', 'Performance',
+      'A datastore is being read directly with no cache layer.',
+      'Consider adding a cache (Redis, Elasticache) in front of read-heavy datastores.');
+  }
+
+  // --- Async coupling: queues + workers ----------------------------------
+  const queues = components.filter((c) => c.type === 'queue' || c.type === 'topic');
+  queues.forEach((q) => {
+    const consumers = connections.filter((e) => e.toId === q.id && e.kind === 'consumes');
+    if (consumers.length === 0) {
+      add('warn', 'Reliability',
+        `Queue "${q.name}" has no consumer. Messages will pile up.`,
+        'Attach at least one consumer/worker, and add a DLQ (dead-letter queue) for poison messages.',
+        q.id);
+    }
+  });
+
+  // --- DLQ heuristic ------------------------------------------------------
+  if (queues.length > 0) {
+    const dlqLike = components.some((c) =>
+      (c.type === 'queue' || c.type === 'topic') && /dlq|dead/i.test(c.name || '')
+    );
+    if (!dlqLike) {
+      add('info', 'Reliability',
+        'No dead-letter queue (DLQ) is shown for your async messaging.',
+        'Add a DLQ component (e.g., "orders_dlq") so failed messages are not silently dropped.');
+    }
+  }
+
+  // --- Workflow / temporal: timeouts and compensation --------------------
+  const workflows = components.filter((c) => c.type === 'workflow' || c.type === 'statemachine' || c.type === 'saga');
+  workflows.forEach((w) => {
+    const outgoing = connections.filter((e) => e.fromId === w.id);
+    const hasTimeout = outgoing.some((e) => e.kind === 'times-out-to');
+    const hasCompensate = outgoing.some((e) => e.kind === 'compensates');
+    if (!hasTimeout) {
+      add('info', 'Resilience',
+        `Workflow "${w.name}" has no explicit timeout / fallback path.`,
+        'Add a "times out to" edge to a fallback or DLQ for long-running steps.',
+        w.id);
+    }
+    if (!hasCompensate && outgoing.length >= 3) {
+      add('info', 'Resilience',
+        `Workflow "${w.name}" performs multiple steps with no compensation path.`,
+        'Add "compensates" edges so partial failures can roll back (saga pattern).',
+        w.id);
+    }
+  });
+
+  // --- External dependencies ---------------------------------------------
+  const externals = components.filter((c) => c.type === 'external');
+  externals.forEach((ex) => {
+    const callers = connections.filter((e) => e.toId === ex.id);
+    if (callers.length > 0) {
+      const protectedByQueue = callers.some((e) => {
+        const from = byId.get(e.fromId);
+        return from && (from.type === 'queue' || from.type === 'topic' || from.type === 'consumer');
+      });
+      if (!protectedByQueue) {
+        add('info', 'Resilience',
+          `External system "${ex.name}" is called synchronously. A slow or down third party will cascade.`,
+          'Insulate with a queue/worker, retry with backoff, and apply a circuit breaker + timeout budget.',
+          ex.id);
+      }
+    }
+  });
+
+  // --- Failover / DR ------------------------------------------------------
+  const hasFailover = connections.some((e) => e.kind === 'fails-over-to');
+  if (components.length >= 6 && !hasFailover) {
+    add('info', 'Disaster recovery',
+      'No failover edges are defined.',
+      'Identify your DR plan: which components fail over to where, and what the RTO/RPO is?');
+  }
+
+  // --- Load balancer with single target ----------------------------------
+  components.filter((c) => c.type === 'loadbalancer').forEach((lb) => {
+    const targets = connections.filter((e) => e.fromId === lb.id);
+    if (targets.length <= 1) {
+      add('warn', 'Availability',
+        `Load balancer "${lb.name}" has ${targets.length} downstream target(s). It's not actually load-balancing.`,
+        'Point the load balancer at ≥2 targets (or remove it from the diagram).',
+        lb.id);
+    }
+  });
+
+  // --- Score --------------------------------------------------------------
+  const weight = { error: 12, warn: 6, info: 2 };
+  const penalty = findings.reduce((s, f) => s + (weight[f.severity] || 0), 0);
+  const score = Math.max(0, 100 - penalty);
+  const grade =
+    score >= 90 ? 'A' :
+    score >= 80 ? 'B' :
+    score >= 65 ? 'C' :
+    score >= 50 ? 'D' : 'F';
+
+  let summary;
+  if (!findings.length) summary = 'No major resilience concerns detected.';
+  else summary = `${findings.length} finding${findings.length === 1 ? '' : 's'} across ${new Set(findings.map((f) => f.category)).size} categor${findings.length === 1 ? 'y' : 'ies'}.`;
+
+  return { findings, score, grade, summary };
+}
+
 // ---- The hook -----------------------------------------------------------
 export function useBuilder() {
   const stored = loadJson(STATE_KEY);
@@ -609,6 +950,11 @@ export function useBuilder() {
   const [customTypes, setCustomTypes] = useState(() => stored?.customTypes ?? {});
   const [title, setTitle] = useState(() => stored?.title ?? 'My Architecture');
   const [baseline, setBaseline] = useState(() => loadJson(BASELINE_KEY));
+  const [cloudId, setCloudId] = useState(() => loadJson(CLOUD_KEY) || null);
+  const [activeProjectId, setActiveProjectIdState] = useState(() => loadJson(PROJECT_KEY) || null);
+  const [cloudSaving, setCloudSaving] = useState(false);
+  const [cloudLastSavedAt, setCloudLastSavedAt] = useState(null);
+  const [cloudError, setCloudError] = useState(null);
 
   // Settings (layout)
   const storedSettings = loadJson(SETTINGS_KEY) || {};
@@ -618,6 +964,21 @@ export function useBuilder() {
   useEffect(() => {
     saveJson(SETTINGS_KEY, { layoutDir, useSubgraphs });
   }, [layoutDir, useSubgraphs]);
+
+  useEffect(() => {
+    saveJson(CLOUD_KEY, cloudId);
+  }, [cloudId]);
+
+  useEffect(() => {
+    saveJson(PROJECT_KEY, activeProjectId);
+  }, [activeProjectId]);
+
+  const setActiveProjectId = useCallback((id) => {
+    setActiveProjectIdState(id || null);
+    // Switching projects detaches us from the current cloud record so the
+    // next edit lands in the newly selected project as a fresh architecture.
+    setCloudId(null);
+  }, []);
 
   // History (undo/redo) — snapshots of the entire editable state.
   const [past, setPast] = useState([]);
@@ -685,7 +1046,72 @@ export function useBuilder() {
     else saveJson(BASELINE_KEY, null);
   }, [baseline]);
 
+  // Cloud auto-sync. When Supabase is configured we treat it as the source of
+  // truth: as soon as the user has any real content we create a record (so it
+  // shows up in the shared gallery), and any subsequent change is debounced
+  // up to that record. localStorage continues to act as an offline cache.
+  // Cloud auto-sync. We do NOT auto-create remote records — the user must
+  // explicitly click "Save to cloud" first. Once a cloudId exists, every
+  // edit debounces an upsert so the file content stays in sync without the
+  // user having to think about it.
+  useEffect(() => {
+    if (!supabaseConfigured || !cloudId) return;
+    const payload = { title, components, connections, customTypes, nextId };
+    const handle = setTimeout(async () => {
+      setCloudSaving(true);
+      setCloudError(null);
+      try {
+        await saveRemoteArchitecture(cloudId, payload, activeProjectId);
+        setCloudLastSavedAt(Date.now());
+      } catch (e) {
+        console.warn('Cloud auto-save failed:', e?.message || e);
+        setCloudError(e?.message || 'Cloud save failed');
+      } finally {
+        setCloudSaving(false);
+      }
+    }, 1200);
+    return () => clearTimeout(handle);
+  }, [title, components, connections, customTypes, cloudId, activeProjectId]);
+
   const allTypes = useMemo(() => ({ ...DEFAULT_TYPES, ...customTypes }), [customTypes]);
+
+  const loadCloudArchitecture = useCallback(async (id) => {
+    const record = await loadRemoteArchitecture(id);
+    if (!record || !record.payload) throw new Error('Cloud architecture not found');
+    commit();
+    const payload = record.payload;
+    setTitle(payload.title || 'My Architecture');
+    setComponents(payload.components || []);
+    setConnections(payload.connections || []);
+    setCustomTypes(payload.customTypes || {});
+    if (typeof payload.nextId === 'number' && payload.nextId > nextId) nextId = payload.nextId;
+    setCloudId(record.id);
+    if (record.project_id) setActiveProjectIdState(record.project_id);
+    return record.id;
+  }, [commit]);
+
+  const saveCloudArchitecture = useCallback(async () => {
+    const payload = { title, components, connections, customTypes, nextId };
+    setCloudSaving(true);
+    setCloudError(null);
+    try {
+      const id = await saveRemoteArchitecture(cloudId, payload, activeProjectId);
+      setCloudId(id);
+      setCloudLastSavedAt(Date.now());
+      return id;
+    } catch (e) {
+      setCloudError(e?.message || 'Cloud save failed');
+      throw e;
+    } finally {
+      setCloudSaving(false);
+    }
+  }, [title, components, connections, customTypes, cloudId, activeProjectId]);
+
+  const detachFromCloud = useCallback(() => {
+    setCloudId(null);
+    setCloudLastSavedAt(null);
+    setCloudError(null);
+  }, []);
 
   // ---------- Mutators (each commits history) ----------
   const addComponent = useCallback((type) => {
@@ -1013,6 +1439,11 @@ export function useBuilder() {
     [components, connections]
   );
 
+  const assessment = useMemo(
+    () => assessResilience({ components, connections, allTypes }),
+    [components, connections, allTypes]
+  );
+
   // ---------- Multi-document workspace ----------
   const loadDocs = () => loadJson(DOCS_KEY) || [];
   const [docs, setDocsState] = useState(loadDocs);
@@ -1114,7 +1545,7 @@ export function useBuilder() {
     // layout
     layoutDir, setLayoutDir, useSubgraphs, setUseSubgraphs,
     // derived
-    mermaid, mergedEdges, simulationSteps, lints,
+    mermaid, mergedEdges, simulationSteps, lints, assessment,
     // maintenance
     reset, loadSample,
     // import/export
@@ -1122,6 +1553,19 @@ export function useBuilder() {
     // baseline / diff
     baseline, captureBaseline, clearBaseline, restoreBaseline,
     diff, diffMermaid, baselineMermaid,
+    // cloud persistence
+    cloudEnabled: supabaseConfigured,
+    cloudId, loadCloudArchitecture, saveCloudArchitecture,
+    cloudSaving, cloudLastSavedAt, cloudError, detachFromCloud,
+    listCloudArchitectures: listRemoteArchitectures,
+    deleteCloudArchitecture: deleteRemoteArchitecture,
+    // projects
+    activeProjectId, setActiveProjectId,
+    listCloudProjects: listRemoteProjects,
+    createCloudProject: createRemoteProject,
+    renameCloudProject: renameRemoteProject,
+    deleteCloudProject: deleteRemoteProject,
+    moveCloudArchitectureToProject: moveRemoteArchitectureToProject,
     // workspaces
     docs, activeDocId, saveAsDoc, saveActiveDoc, loadDoc, renameDoc, duplicateDoc, deleteDoc, newDoc
   };

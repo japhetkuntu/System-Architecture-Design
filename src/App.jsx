@@ -12,8 +12,11 @@ import AdrDialog from './components/AdrDialog.jsx';
 import ConfirmDialog from './components/ConfirmDialog.jsx';
 import WelcomeCard from './components/WelcomeCard.jsx';
 import LintsPanel from './components/LintsPanel.jsx';
+import AssessmentPanel from './components/AssessmentPanel.jsx';
 import WorkspaceSidebar from './components/WorkspaceSidebar.jsx';
 import ShareDialog from './components/ShareDialog.jsx';
+import CloudGallery from './components/CloudGallery.jsx';
+import ProjectPicker from './components/ProjectPicker.jsx';
 import LayoutControls from './components/LayoutControls.jsx';
 
 const DISMISS_KEY = 'archivise:welcome-dismissed:v1';
@@ -26,6 +29,9 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [adrOpen, setAdrOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [cloudOpen, setCloudOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [activeProjectName, setActiveProjectName] = useState('');
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [selection, setSelection] = useState(() => new Set());
   const [confirm, setConfirm] = useState(null);
@@ -76,23 +82,55 @@ export default function App() {
   }, []);
   const clearSelection = useCallback(() => setSelection(new Set()), []);
 
+  // --- Keep active project name resolved for the header button ---
+  useEffect(() => {
+    if (!b.cloudEnabled) { setActiveProjectName(''); return; }
+    if (!b.activeProjectId) { setActiveProjectName(''); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await b.listCloudProjects();
+        if (cancelled) return;
+        const match = list.find((p) => p.id === b.activeProjectId);
+        setActiveProjectName(match?.name || '');
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [b.cloudEnabled, b.activeProjectId, b.listCloudProjects]);
+
   // --- Consume shared architecture from URL on first load ---
   const consumedShareRef = useRef(false);
   useEffect(() => {
     if (consumedShareRef.current) return;
     consumedShareRef.current = true;
     const token = readShareFromLocation();
-    if (!token) return;
+    const params = new URLSearchParams(window.location.search);
+    const cloudId = params.get('id') || params.get('cloudId');
+
+    if (token) {
+      (async () => {
+        try {
+          const data = await unpackShare(token);
+          b.importJson(JSON.stringify(data), { asBaseline: false });
+          clearShareInLocation();
+          dismissWelcome();
+          showToast('Loaded architecture from shared link');
+        } catch (e) {
+          setImportError(`Shared link is invalid: ${e.message || 'unknown error'}`);
+          clearShareInLocation();
+        }
+      })();
+      return;
+    }
+
+    if (!cloudId) return;
     (async () => {
       try {
-        const data = await unpackShare(token);
-        b.importJson(JSON.stringify(data), { asBaseline: false });
-        clearShareInLocation();
+        await b.loadCloudArchitecture(cloudId);
         dismissWelcome();
-        showToast('Loaded architecture from shared link');
+        showToast('Loaded architecture from cloud');
       } catch (e) {
-        setImportError(`Shared link is invalid: ${e.message || 'unknown error'}`);
-        clearShareInLocation();
+        setImportError(`Cloud load failed: ${e.message || 'unknown error'}`);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -290,6 +328,16 @@ export default function App() {
 
           <button type="button" className="secondary-btn" onClick={() => setWorkspaceOpen(true)}
             title="Open saved architectures (⌘K)">📚 Workspace</button>
+          {b.cloudEnabled && (
+            <>
+              <button type="button" className="secondary-btn" onClick={() => setProjectsOpen(true)}
+                title="Choose or create a shared project">
+                📁 {activeProjectName || 'No project'}
+              </button>
+              <button type="button" className="secondary-btn" onClick={() => setCloudOpen(true)}
+                title="Browse architectures in the shared cloud workspace">🌐 Cloud</button>
+            </>
+          )}
           <button type="button" className="secondary-btn" onClick={b.loadSample} title="Load a worked example">✨ Sample</button>
           <button type="button" className="danger-btn" onClick={askClearAll} title="Clear everything">🗑 Clear</button>
         </div>
@@ -331,9 +379,37 @@ export default function App() {
           onChange={(e) => b.setTitle(e.target.value)}
           placeholder="e.g. Customer Onboarding"
         />
-        <span className="autosave-pill" title={b.activeDocId ? 'Linked to a saved workspace doc' : 'Your work auto-saves to this browser'}>
-          💾 {b.activeDocId ? 'Saved to workspace' : 'Auto-saved'}
-        </span>
+        {b.cloudEnabled ? (
+          b.cloudId ? (
+            <>
+              <span className="autosave-pill" title={b.cloudError || 'Content auto-syncs to the cloud file'}>
+                {b.cloudSaving
+                  ? '☁ Saving…'
+                  : b.cloudError
+                    ? `⚠ ${b.cloudError}`
+                    : b.cloudLastSavedAt
+                      ? `☁ Saved · ${new Date(b.cloudLastSavedAt).toLocaleTimeString()}`
+                      : '☁ Cloud file'}
+              </span>
+              <button type="button" className="link-btn" onClick={b.detachFromCloud}
+                title="Stop syncing to this cloud file (your local copy stays)">Detach</button>
+            </>
+          ) : (
+            <button type="button" className="primary-btn small"
+              onClick={async () => {
+                try { await b.saveCloudArchitecture(); showToast('Saved to cloud'); }
+                catch (e) { showToast(`Cloud save failed: ${e.message || 'unknown'}`); }
+              }}
+              disabled={b.components.length === 0}
+              title="Create a new cloud file for this architecture (then content auto-syncs)">
+              ☁ Save to cloud
+            </button>
+          )
+        ) : (
+          <span className="autosave-pill" title={b.activeDocId ? 'Linked to a saved workspace doc' : 'Your work auto-saves to this browser'}>
+            💾 {b.activeDocId ? 'Saved to workspace' : 'Auto-saved'}
+          </span>
+        )}
       </section>
 
       <main className="layout">
@@ -391,6 +467,10 @@ export default function App() {
                 onReorder={b.reorderConnections}
               />
               <LintsPanel lints={b.lints} />
+              <AssessmentPanel
+                assessment={b.assessment}
+                onSelectComponent={(id) => { setSelection(new Set([id])); showToast('Selected'); }}
+              />
               {b.components.length > 0 && !b.baseline && (
                 <div className="hint-card">
                   💡 <strong>Tip:</strong> About to refactor? Click <em>🔍 Diff</em> and capture this as your <strong>baseline</strong> first — Archivise will track every change you make from here.
@@ -438,6 +518,36 @@ export default function App() {
         open={shareOpen}
         onClose={() => setShareOpen(false)}
         getArchitecture={getArchitecture}
+        saveToCloud={b.saveCloudArchitecture}
+        cloudEnabled={b.cloudEnabled}
+      />
+
+      <CloudGallery
+        open={cloudOpen}
+        onClose={() => setCloudOpen(false)}
+        cloudEnabled={b.cloudEnabled}
+        currentCloudId={b.cloudId}
+        activeProjectId={b.activeProjectId}
+        activeProjectName={activeProjectName}
+        listCloudArchitectures={b.listCloudArchitectures}
+        loadCloudArchitecture={b.loadCloudArchitecture}
+        deleteCloudArchitecture={b.deleteCloudArchitecture}
+        moveCloudArchitectureToProject={b.moveCloudArchitectureToProject}
+        listCloudProjects={b.listCloudProjects}
+        onOpenProjects={() => { setCloudOpen(false); setProjectsOpen(true); }}
+        onLoaded={(id) => { setCloudOpen(false); clearSelection(); dismissWelcome(); showToast('Loaded from cloud'); }}
+      />
+
+      <ProjectPicker
+        open={projectsOpen}
+        onClose={() => setProjectsOpen(false)}
+        cloudEnabled={b.cloudEnabled}
+        activeProjectId={b.activeProjectId}
+        onSelect={(id) => { b.setActiveProjectId(id); showToast(id ? 'Switched project' : 'Cleared project'); }}
+        listCloudProjects={b.listCloudProjects}
+        createCloudProject={b.createCloudProject}
+        renameCloudProject={b.renameCloudProject}
+        deleteCloudProject={b.deleteCloudProject}
       />
 
       <WorkspaceSidebar

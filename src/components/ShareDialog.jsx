@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { packShare } from '../utils/share.js';
 
-export default function ShareDialog({ open, onClose, getArchitecture }) {
+export default function ShareDialog({ open, onClose, getArchitecture, saveToCloud, cloudEnabled }) {
   const [url, setUrl] = useState('');
   const [size, setSize] = useState(0);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -33,6 +34,23 @@ export default function ShareDialog({ open, onClose, getArchitecture }) {
     } catch { /* noop */ }
   };
 
+  const saveCloud = async () => {
+    if (!saveToCloud) return;
+    setErr('');
+    setSaving(true);
+    try {
+      const id = await saveToCloud();
+      const base = `${window.location.origin}${window.location.pathname}`;
+      const cloudUrl = `${base}?id=${encodeURIComponent(id)}`;
+      setUrl(cloudUrl);
+      setSize(cloudUrl.length);
+    } catch (e) {
+      setErr(e.message || 'Failed to save to cloud');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const warn = size > 2000;
 
   return (
@@ -49,6 +67,11 @@ export default function ShareDialog({ open, onClose, getArchitecture }) {
         </header>
         <div className="modal-body">
           {err && <div className="banner banner-error"><span>⚠ {err}</span></div>}
+          {!cloudEnabled && (
+            <div className="banner banner-warning">
+              <span>⚠ Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your root .env.</span>
+            </div>
+          )}
           {!err && (
             <>
               <textarea
@@ -68,6 +91,11 @@ export default function ShareDialog({ open, onClose, getArchitecture }) {
         <footer className="modal-foot">
           <button type="button" className="link-btn" onClick={onClose}>Close</button>
           <div className="modal-foot-actions">
+            {saveToCloud && (
+              <button type="button" className="secondary-btn small" onClick={saveCloud} disabled={saving || !cloudEnabled}>
+                {saving ? 'Saving…' : 'Save to cloud'}
+              </button>
+            )}
             <button type="button" className="primary-btn small" onClick={copy} disabled={!url}>
               {copied ? '✓ Copied!' : '📋 Copy link'}
             </button>
