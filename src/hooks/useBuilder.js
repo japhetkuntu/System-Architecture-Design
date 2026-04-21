@@ -159,11 +159,53 @@ function slugify(name, fallback) {
 }
 
 function escapeLabel(s) {
-  return String(s || '').replace(/"/g, '\\"').replace(/\|/g, '/');
+  return String(s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\|/g, '/')
+    .replace(/\n/g, '\\n');
+}
+
+function wrapText(text, maxLen = 24) {
+  const words = String(text || '').split(/(\s+)/);
+  let line = '';
+  const lines = [];
+
+  for (const token of words) {
+    if (!token) continue;
+    if (token.trim() === '') {
+      line += token;
+      continue;
+    }
+    if ((line + token).length <= maxLen || !line.trim()) {
+      line += token;
+      continue;
+    }
+    lines.push(line.trimEnd());
+    if (token.length > maxLen) {
+      let start = 0;
+      while (start < token.length) {
+        lines.push(token.slice(start, start + maxLen));
+        start += maxLen;
+      }
+      line = '';
+    } else {
+      line = token;
+    }
+  }
+  if (line) lines.push(line.trimEnd());
+  return lines.join('\n');
+}
+
+function wrapLabel(value) {
+  return String(value || '')
+    .split('\n')
+    .map((part) => wrapText(part, 26))
+    .join('\n');
 }
 
 function shapeNode(id, label, shape) {
-  const l = escapeLabel(label);
+  const l = escapeLabel(wrapLabel(label));
   switch (shape) {
     case 'cyl':     return `${id}[("${l}")]`;
     case 'queue':   return `${id}>"${l}"]`;
@@ -185,7 +227,7 @@ function pickArrow(arrows) {
 
 // Build a labelled mermaid edge for any of the supported arrow styles.
 function edgeLine(from, to, arrow, label) {
-  const safe = label ? `"${escapeLabel(label)}"` : '';
+  const safe = label ? `"${escapeLabel(wrapLabel(label))}"` : '';
   if (!label) return `  ${from} ${arrow} ${to}`;
   switch (arrow) {
     case '-.->': return `  ${from} -. ${safe} .-> ${to}`;
@@ -245,7 +287,7 @@ function hexLight(hex) {
 export function buildMermaid({ components, mergedEdges, allTypes, layoutDir = 'LR', useSubgraphs = true }) {
   // Init directive — keeps the diagram airy in any renderer (live view, ADR
   // preview, exported markdown), not just our own DiagramView.
-  const initDirective = `%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 70, "rankSpacing": 90, "padding": 20, "diagramPadding": 24, "htmlLabels": true, "useMaxWidth": false}} }%%`;
+  const initDirective = `%%{init: {"flowchart": {"curve": "basis", "nodeSpacing": 70, "rankSpacing": 90, "padding": 24, "diagramPadding": 32, "htmlLabels": false, "useMaxWidth": false}} }%%`;
 
   if (!components.length) {
     return `${initDirective}\nflowchart ${layoutDir}\n  empty["Add components from the palette to see your diagram"]`;

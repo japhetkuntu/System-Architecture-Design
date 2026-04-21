@@ -32,15 +32,15 @@ export default function DiagramView({
       mermaid.initialize({
         startOnLoad: false,
         theme: 'neutral',
-        fontFamily: 'system-ui',
+        fontFamily: 'system-ui, sans-serif',
         flowchart: {
           curve: 'basis',
-          htmlLabels: true,
+          htmlLabels: false,    // SVG text never clips; foreignObject has fixed pixel boxes
           useMaxWidth: false,
-          nodeSpacing: 70,      // horizontal gap between sibling nodes
-          rankSpacing: 90,      // gap between ranks (rows / columns)
-          padding: 20,          // padding around each node
-          diagramPadding: 24    // padding around the whole diagram
+          nodeSpacing: 70,
+          rankSpacing: 90,
+          padding: 24,
+          diagramPadding: 32
         }
       });
       initialized = true;
@@ -56,6 +56,16 @@ export default function DiagramView({
         const { svg } = await mermaid.render(renderId, code);
         if (!cancelled && svgWrapRef.current) {
           svgWrapRef.current.innerHTML = svg;
+          // Force the SVG root to never clip its content. Mermaid sets
+          // height/width attributes that can cause overflow:hidden by default.
+          const svgEl = svgWrapRef.current.querySelector('svg');
+          if (svgEl) {
+            svgEl.style.overflow = 'visible';
+            svgEl.removeAttribute('height');
+            // Keep width:auto so the scroll container determines the layout
+            svgEl.style.width = '100%';
+            svgEl.style.minWidth = svgEl.getAttribute('width') || 'auto';
+          }
         }
       } catch (e) {
         if (!cancelled) {
@@ -114,6 +124,56 @@ export default function DiagramView({
     const labels = svg.querySelectorAll('g.edgeLabel');
     const label = labels[highlightStep.edgeIndex];
     if (label) label.classList.remove('archv-dim');
+
+    // Auto-scroll: keep the active simulation step always centred on screen
+    // across both the inner diagram scroll container AND the page itself.
+    requestAnimationFrame(() => {
+      const scrollEl = wrap.closest('.diagram-scroll') || wrap.parentElement;
+      if (!scrollEl) return;
+      const activeEls = [fromNode, toNode, edge].filter(Boolean);
+      if (!activeEls.length) return;
+
+      // ① Instantly cancel every in-progress smooth animation so
+      //    getBoundingClientRect() returns stable, accurate values.
+      scrollEl.scrollTo({ left: scrollEl.scrollLeft, top: scrollEl.scrollTop, behavior: 'instant' });
+      window.scrollTo(window.scrollX, window.scrollY); // 'instant' is the default
+
+      // ② Read stable positions.
+      const scrollRect = scrollEl.getBoundingClientRect();
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      activeEls.forEach((el) => {
+        const r = el.getBoundingClientRect();
+        minX = Math.min(minX, r.left);
+        minY = Math.min(minY, r.top);
+        maxX = Math.max(maxX, r.right);
+        maxY = Math.max(maxY, r.bottom);
+      });
+      if (!isFinite(minX)) return;
+
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+
+      // ③ Scroll the diagram container to centre the active node/edge.
+      scrollEl.scrollTo({
+        left: scrollEl.scrollLeft + cx - (scrollRect.left + scrollRect.width  / 2),
+        top:  scrollEl.scrollTop  + cy - (scrollRect.top  + scrollRect.height / 2),
+        behavior: 'smooth',
+      });
+
+      // ④ Also scroll the page so the diagram panel is fully in the viewport.
+      //    This is needed on single-column / small-screen layouts where the
+      //    output panel is not sticky and the user would otherwise have to
+      //    manually scroll the page to see the diagram.
+      const panelRect = scrollEl.getBoundingClientRect();
+      const vh = window.innerHeight;
+      if (panelRect.top < 0) {
+        // Panel is above the viewport — scroll up to reveal it
+        window.scrollTo({ top: window.scrollY + panelRect.top - 16, behavior: 'smooth' });
+      } else if (panelRect.bottom > vh) {
+        // Panel is below the viewport — scroll down to reveal it
+        window.scrollTo({ top: window.scrollY + (panelRect.bottom - vh) + 16, behavior: 'smooth' });
+      }
+    });
   }, [highlightStep, components, code]);
 
   const downloadSvg = () => {
