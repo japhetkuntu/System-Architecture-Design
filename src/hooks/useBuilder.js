@@ -204,16 +204,30 @@ export function mergeEdges(connections) {
   connections.forEach((conn) => {
     const key = `${conn.fromId}=>${conn.toId}`;
     if (!map.has(key)) {
-      map.set(key, { fromId: conn.fromId, toId: conn.toId, labels: [], notes: [], connIds: [] });
+      map.set(key, {
+        fromId: conn.fromId,
+        toId: conn.toId,
+        labels: [],
+        notes: [],
+        connIds: [],
+        arrows: [],
+        categories: []
+      });
       order.push(key);
     }
-    const rel = RELATIONSHIPS.find((r) => r.id === conn.kind);
+    const rel = getRelationship(conn.kind);
     const lbl = conn.label || rel?.label || '';
     if (lbl) map.get(key).labels.push(lbl);
     if (conn.note) map.get(key).notes.push(conn.note);
+    if (rel?.arrow) map.get(key).arrows.push(rel.arrow);
+    if (rel?.category) map.get(key).categories.push(rel.category);
     map.get(key).connIds.push(conn.id);
   });
-  return order.map((k) => map.get(k));
+  return order.map((k) => {
+    const e = map.get(k);
+    e.arrow = pickArrow(e.arrows);
+    return e;
+  });
 }
 
 function hexLight(hex) {
@@ -282,11 +296,7 @@ export function buildMermaid({ components, mergedEdges, allTypes, layoutDir = 'L
     if (e.labels.length) parts.push(e.labels.join(' • '));
     if (e.notes && e.notes.length) parts.push(`📝 ${e.notes.join(' · ')}`);
     const label = parts.join(' — ');
-    if (label) {
-      lines.push(`  ${from} -->|"${escapeLabel(label)}"| ${to}`);
-    } else {
-      lines.push(`  ${from} --> ${to}`);
-    }
+    lines.push(edgeLine(from, to, e.arrow || '-->', label));
   });
 
   components.forEach((c) => {
@@ -416,10 +426,11 @@ export function buildDiffMermaid({ baseline, current, allTypes, layoutDir = 'LR'
     const e = inC ? currEdges.get(k) : baseEdges.get(k);
     const status = inB && inC ? 'unchanged' : inC ? 'added' : 'removed';
     const gkey = `${e.fromId}=>${e.toId}|${status}`;
-    if (!grouping.has(gkey)) grouping.set(gkey, { fromId: e.fromId, toId: e.toId, labels: [], status });
-    const rel = RELATIONSHIPS.find((r) => r.id === e.kind);
+    if (!grouping.has(gkey)) grouping.set(gkey, { fromId: e.fromId, toId: e.toId, labels: [], arrows: [], status });
+    const rel = getRelationship(e.kind);
     const lbl = e.label || rel?.label || '';
     if (lbl) grouping.get(gkey).labels.push(lbl);
+    if (rel?.arrow) grouping.get(gkey).arrows.push(rel.arrow);
   });
 
   const edgeStyles = [];
@@ -430,11 +441,8 @@ export function buildDiffMermaid({ baseline, current, allTypes, layoutDir = 'LR'
     if (!from || !to) return;
     const tag = g.status === 'added' ? '+ ' : g.status === 'removed' ? '- ' : '';
     const label = g.labels.length ? `${tag}${g.labels.join(' • ')}` : tag.trim();
-    if (label) {
-      lines.push(`  ${from} -->|"${escapeLabel(label)}"| ${to}`);
-    } else {
-      lines.push(`  ${from} --> ${to}`);
-    }
+    const arrow = pickArrow(g.arrows);
+    lines.push(edgeLine(from, to, arrow, label));
     if (g.status === 'added') edgeStyles.push(`  linkStyle ${edgeIdx} stroke:#16a34a,stroke-width:2.5px`);
     else if (g.status === 'removed') edgeStyles.push(`  linkStyle ${edgeIdx} stroke:#dc2626,stroke-width:2.5px,stroke-dasharray:5 3`);
     edgeIdx++;
@@ -865,26 +873,45 @@ export function useBuilder() {
     commit();
     nextId = 1;
     const c = [
-      { id: newId(), type: 'user',     name: 'Customer',                notes: '', icon: '', color: '' },
-      { id: newId(), type: 'frontend', name: 'Mobile App',              notes: '', icon: '', color: '' },
-      { id: newId(), type: 'api',      name: 'Identity API',            notes: 'Auth + user mgmt', icon: '', color: '' },
-      { id: newId(), type: 'queue',    name: 'customer_creation_request_received', notes: 'Kafka topic', icon: '', color: '' },
-      { id: newId(), type: 'consumer', name: 'User Onboarding Consumer', notes: '', icon: '', color: '' },
-      { id: newId(), type: 'database', name: 'PostgreSQL',              notes: 'users db', icon: '', color: '' },
-      { id: newId(), type: 'search',   name: 'Elasticsearch',           notes: '', icon: '', color: '' },
-      { id: newId(), type: 'external', name: 'Fineract',                notes: 'Core banking', icon: '', color: '' }
+      { id: newId(), type: 'user',         name: 'Customer',                notes: '', icon: '', color: '' },
+      { id: newId(), type: 'mobile',       name: 'Mobile App',              notes: '', icon: '', color: '' },
+      { id: newId(), type: 'edge',         name: 'CloudFront',              notes: 'TLS + WAF', icon: '', color: '' },
+      { id: newId(), type: 'apigateway',   name: 'API Gateway',             notes: '', icon: '', color: '' },
+      { id: newId(), type: 'idp',          name: 'Cognito',                 notes: 'OIDC', icon: '', color: '' },
+      { id: newId(), type: 'api',          name: 'Identity API',            notes: 'Auth + user mgmt', icon: '', color: '' },
+      { id: newId(), type: 'eventbus',     name: 'EventBridge',             notes: 'domain events', icon: '', color: '' },
+      { id: newId(), type: 'workflow',     name: 'Onboarding Workflow',     notes: 'Step Functions', icon: '', color: '' },
+      { id: newId(), type: 'function',     name: 'Provision Account',       notes: 'Lambda', icon: '', color: '' },
+      { id: newId(), type: 'function',     name: 'Send Welcome Email',      notes: 'Lambda', icon: '', color: '' },
+      { id: newId(), type: 'queue',        name: 'kyc_queue',               notes: 'SQS', icon: '', color: '' },
+      { id: newId(), type: 'consumer',     name: 'KYC Worker',              notes: '', icon: '', color: '' },
+      { id: newId(), type: 'database',     name: 'PostgreSQL',              notes: 'users db', icon: '', color: '' },
+      { id: newId(), type: 'search',       name: 'OpenSearch',              notes: '', icon: '', color: '' },
+      { id: newId(), type: 'external',     name: 'Fineract',                notes: 'Core banking', icon: '', color: '' },
+      { id: newId(), type: 'scheduler',    name: 'Daily Reconciliation',    notes: 'cron 0 2 * * *', icon: '', color: '' },
+      { id: newId(), type: 'telemetry',    name: 'CloudWatch',              notes: 'metrics + logs', icon: '', color: '' }
     ];
     setComponents(c);
     setConnections([
-      { id: newId(), fromId: c[0].id, toId: c[1].id, kind: 'uses',       label: '', note: '' },
-      { id: newId(), fromId: c[1].id, toId: c[2].id, kind: 'calls',      label: 'register', note: '' },
-      { id: newId(), fromId: c[1].id, toId: c[2].id, kind: 'calls',      label: 'login', note: '' },
-      { id: newId(), fromId: c[2].id, toId: c[3].id, kind: 'publishes',  label: '', note: 'fire-and-forget' },
-      { id: newId(), fromId: c[4].id, toId: c[3].id, kind: 'consumes',   label: '', note: '' },
-      { id: newId(), fromId: c[4].id, toId: c[5].id, kind: 'writes',     label: '', note: '' },
-      { id: newId(), fromId: c[4].id, toId: c[6].id, kind: 'writes',     label: 'index user', note: '' },
-      { id: newId(), fromId: c[4].id, toId: c[7].id, kind: 'integrates', label: 'create account', note: '' },
-      { id: newId(), fromId: c[7].id, toId: c[4].id, kind: 'returns',    label: 'account id', note: '' }
+      { id: newId(), fromId: c[0].id,  toId: c[1].id,  kind: 'uses',                 label: '', note: '' },
+      { id: newId(), fromId: c[1].id,  toId: c[2].id,  kind: 'calls',                label: 'HTTPS', note: '' },
+      { id: newId(), fromId: c[2].id,  toId: c[3].id,  kind: 'load-balances-to',     label: '', note: '' },
+      { id: newId(), fromId: c[3].id,  toId: c[5].id,  kind: 'commands',             label: 'register', note: '' },
+      { id: newId(), fromId: c[5].id,  toId: c[4].id,  kind: 'authenticates-via',    label: '', note: '' },
+      { id: newId(), fromId: c[5].id,  toId: c[6].id,  kind: 'emits',                label: 'CustomerRegistered', note: 'fire-and-forget' },
+      { id: newId(), fromId: c[6].id,  toId: c[7].id,  kind: 'triggers',             label: '', note: '' },
+      { id: newId(), fromId: c[7].id,  toId: c[8].id,  kind: 'orchestrates',         label: 'step 1', note: '' },
+      { id: newId(), fromId: c[7].id,  toId: c[10].id, kind: 'fans-out',             label: 'KYC checks', note: '' },
+      { id: newId(), fromId: c[11].id, toId: c[10].id, kind: 'consumes',             label: '', note: '' },
+      { id: newId(), fromId: c[11].id, toId: c[14].id, kind: 'integrates',           label: 'KYC lookup', note: '' },
+      { id: newId(), fromId: c[8].id,  toId: c[14].id, kind: 'commands',             label: 'create account', note: '' },
+      { id: newId(), fromId: c[8].id,  toId: c[12].id, kind: 'writes',               label: '', note: '' },
+      { id: newId(), fromId: c[8].id,  toId: c[13].id, kind: 'indexes',              label: 'user profile', note: '' },
+      { id: newId(), fromId: c[7].id,  toId: c[9].id,  kind: 'invokes',              label: 'on success', note: '' },
+      { id: newId(), fromId: c[7].id,  toId: c[8].id,  kind: 'compensates',          label: 'on failure', note: 'saga rollback' },
+      { id: newId(), fromId: c[15].id, toId: c[12].id, kind: 'schedules',            label: 'reconcile', note: '' },
+      { id: newId(), fromId: c[16].id, toId: c[5].id,  kind: 'observes',             label: '', note: '' },
+      { id: newId(), fromId: c[16].id, toId: c[7].id,  kind: 'observes',             label: '', note: '' }
     ]);
     setTitle('Customer Onboarding');
   }, [commit]);

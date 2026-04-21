@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { RELATIONSHIPS } from '../hooks/useBuilder.js';
+import { RELATIONSHIPS, RELATIONSHIP_CATEGORIES, getRelationship } from '../hooks/useBuilder.js';
 import { makeDragHandlers } from '../utils/dnd.js';
 
 function compLabel(c, allTypes) {
@@ -9,36 +9,138 @@ function compLabel(c, allTypes) {
   return `${icon} ${c.name || def?.label || c.id}`.trim();
 }
 
-// Lightweight heuristic: suggest the most natural relationship kind
-// given the component types being connected.
+// Senior-architect heuristic: pick the most natural relationship kind
+// given the component types being connected. Falls back to 'calls'.
 const SUGGEST_MAP = {
-  'user>frontend':     'uses',
-  'user>api':          'calls',
-  'frontend>api':      'calls',
-  'frontend>external': 'calls',
-  'api>database':      'writes',
-  'api>cache':         'reads',
-  'api>search':        'reads',
-  'api>storage':       'writes',
-  'api>queue':         'publishes',
-  'api>external':      'integrates',
-  'api>api':           'calls',
-  'service>database':  'writes',
-  'service>queue':     'publishes',
-  'service>external':  'integrates',
-  'consumer>queue':    'consumes',
-  'consumer>database': 'writes',
-  'consumer>search':   'writes',
-  'consumer>api':      'calls',
-  'consumer>external': 'integrates',
-  'queue>consumer':    'notifies',
-  'external>api':      'returns'
+  // Clients & edge
+  'user>frontend':         'uses',
+  'user>mobile':           'uses',
+  'frontend>edge':         'calls',
+  'mobile>edge':           'calls',
+  'frontend>apigateway':   'calls',
+  'mobile>apigateway':     'calls',
+  'edge>loadbalancer':     'load-balances-to',
+  'edge>apigateway':       'load-balances-to',
+  'loadbalancer>api':      'load-balances-to',
+  'loadbalancer>container': 'load-balances-to',
+  'apigateway>api':        'commands',
+  'apigateway>function':   'invokes',
+  'apigateway>container':  'commands',
+
+  // Auth / security
+  'api>idp':               'authenticates-via',
+  'function>idp':          'authenticates-via',
+  'apigateway>idp':        'authorizes-via',
+  'api>secrets':           'reads',
+  'function>secrets':      'reads',
+
+  // Backend → data
+  'api>database':          'writes',
+  'api>cache':             'caches',
+  'api>search':            'queries',
+  'api>storage':           'writes',
+  'api>warehouse':         'writes',
+  'function>database':     'writes',
+  'function>cache':        'caches',
+  'function>storage':      'writes',
+  'container>database':    'writes',
+  'consumer>database':     'writes',
+  'consumer>search':       'indexes',
+  'consumer>warehouse':    'streams',
+
+  // Backend → backend / external
+  'api>api':               'calls',
+  'api>function':          'invokes',
+  'api>container':         'calls',
+  'function>function':     'invokes',
+  'api>external':          'integrates',
+  'function>external':     'integrates',
+  'container>external':    'integrates',
+  'consumer>external':     'integrates',
+  'external>api':          'returns',
+
+  // Async messaging
+  'api>queue':             'publishes',
+  'api>topic':             'publishes',
+  'api>eventbus':          'emits',
+  'function>queue':        'publishes',
+  'function>topic':        'publishes',
+  'function>eventbus':     'emits',
+  'consumer>queue':        'consumes',
+  'consumer>topic':        'subscribes',
+  'queue>consumer':        'notifies',
+  'topic>consumer':        'fans-out',
+  'topic>function':        'fans-out',
+  'eventbus>function':     'triggers',
+  'eventbus>workflow':     'triggers',
+  'eventbus>queue':        'fans-out',
+
+  // Temporal / orchestration plane
+  'scheduler>function':    'schedules',
+  'scheduler>workflow':    'schedules',
+  'scheduler>api':         'schedules',
+  'scheduler>database':    'schedules',
+  'workflow>activity':     'orchestrates',
+  'workflow>function':     'invokes',
+  'workflow>api':          'commands',
+  'workflow>queue':        'publishes',
+  'workflow>signal':       'awaits',
+  'workflow>timer':        'awaits',
+  'statemachine>activity': 'orchestrates',
+  'saga>activity':         'orchestrates',
+  'saga>function':         'compensates',
+  'timer>workflow':        'triggers',
+  'signal>workflow':       'triggers',
+  'activity>database':     'writes',
+  'activity>external':     'integrates',
+
+  // Streaming
+  'api>stream':            'streams',
+  'function>stream':       'streams',
+  'consumer>stream':       'consumes',
+  'stream>consumer':       'fans-out',
+  'stream>warehouse':      'streams',
+
+  // Replication / DR
+  'database>database':     'replicates',
+  'storage>storage':       'replicates',
+
+  // Observability
+  'telemetry>api':         'observes',
+  'telemetry>function':    'observes',
+  'telemetry>workflow':    'observes',
+  'telemetry>database':    'observes',
+  'telemetry>queue':       'observes'
 };
 
 function suggestKind(from, to) {
   if (!from || !to) return 'calls';
   const key = `${from.type}>${to.type}`;
   return SUGGEST_MAP[key] || 'calls';
+}
+
+// Render the relationship <select> grouped by category for skim-readability.
+function RelationshipSelect({ value, onChange, ariaLabel }) {
+  const grouped = useMemo(() => {
+    const m = new Map();
+    RELATIONSHIPS.forEach((r) => {
+      const arr = m.get(r.category) || [];
+      arr.push(r);
+      m.set(r.category, arr);
+    });
+    return m;
+  }, []);
+  return (
+    <select value={value} onChange={onChange} aria-label={ariaLabel}>
+      {RELATIONSHIP_CATEGORIES.map((cat) => grouped.has(cat) && (
+        <optgroup key={cat} label={cat}>
+          {grouped.get(cat).map((r) => (
+            <option key={r.id} value={r.id} title={r.description}>{r.label}</option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
 }
 
 export default function ConnectionList({
@@ -112,7 +214,8 @@ export default function ConnectionList({
       });
   }, [connections, filter, components, allTypes]);
 
-  const draftRelLabel = RELATIONSHIPS.find((r) => r.id === draft.kind)?.label || draft.kind;
+  const draftRel = getRelationship(draft.kind);
+  const draftRelLabel = draftRel.label;
   const suggested = from && to ? suggestKind(from, to) : null;
   const showSuggestion = suggested && suggested !== draft.kind && touchedKind;
 
@@ -160,6 +263,9 @@ export default function ConnectionList({
             <div className="conn-field conn-field-rel">
               <label>
                 Relationship
+                <span className={`rel-cat-badge cat-${draftRel.category.toLowerCase()}`} title={`${draftRel.category} relationship`}>
+                  {draftRel.category}
+                </span>
                 {showSuggestion && (
                   <button
                     type="button"
@@ -167,18 +273,16 @@ export default function ConnectionList({
                     title="Use suggested relationship"
                     onClick={() => { updateDraft({ kind: suggested }); setTouchedKind(false); }}
                   >
-                    suggest: {RELATIONSHIPS.find((r) => r.id === suggested)?.label}
+                    suggest: {getRelationship(suggested).label}
                   </button>
                 )}
               </label>
-              <select
+              <RelationshipSelect
                 value={draft.kind}
                 onChange={(e) => { setTouchedKind(true); updateDraft({ kind: e.target.value }); }}
-              >
-                {RELATIONSHIPS.map((r) => (
-                  <option key={r.id} value={r.id}>{r.label}</option>
-                ))}
-              </select>
+                ariaLabel="Relationship type"
+              />
+              <small className="rel-desc muted">{draftRel.description}</small>
             </div>
 
             <div className="conn-field">
@@ -272,7 +376,12 @@ export default function ConnectionList({
                     <span className="conn-chip">{compLabel(f, allTypes)}</span>
                     <span className="conn-arrow">
                       <span className="conn-line" />
-                      <span className="conn-kind">{labelText}</span>
+                      <span className="conn-kind" title={rel?.description || ''}>
+                        {labelText}
+                        {rel?.category && (
+                          <span className={`rel-cat-badge cat-${rel.category.toLowerCase()}`}>{rel.category}</span>
+                        )}
+                      </span>
                       <span className="conn-arrow-head">▶</span>
                     </span>
                     <span className="conn-chip">{compLabel(t, allTypes)}</span>
@@ -292,11 +401,11 @@ export default function ConnectionList({
                         <option key={c.id} value={c.id}>{compLabel(c, allTypes)}</option>
                       ))}
                     </select>
-                    <select value={conn.kind} onChange={(e) => onUpdate(conn.id, { kind: e.target.value })}>
-                      {RELATIONSHIPS.map((r) => (
-                        <option key={r.id} value={r.id}>{r.label}</option>
-                      ))}
-                    </select>
+                    <RelationshipSelect
+                      value={conn.kind}
+                      onChange={(e) => onUpdate(conn.id, { kind: e.target.value })}
+                      ariaLabel="Relationship type"
+                    />
                     <select value={conn.toId} onChange={(e) => onUpdate(conn.id, { toId: e.target.value })}>
                       {components.filter((c) => c.id !== conn.fromId).map((c) => (
                         <option key={c.id} value={c.id}>{compLabel(c, allTypes)}</option>
