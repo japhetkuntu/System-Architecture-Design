@@ -1,5 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBuilder } from './hooks/useBuilder.js';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js';
+import { readShareFromLocation, clearShareInLocation, unpackShare } from './utils/share.js';
 import ComponentPalette from './components/ComponentPalette.jsx';
 import ComponentList from './components/ComponentList.jsx';
 import ConnectionList from './components/ConnectionList.jsx';
@@ -9,6 +11,10 @@ import DiffPanel from './components/DiffPanel.jsx';
 import AdrDialog from './components/AdrDialog.jsx';
 import ConfirmDialog from './components/ConfirmDialog.jsx';
 import WelcomeCard from './components/WelcomeCard.jsx';
+import LintsPanel from './components/LintsPanel.jsx';
+import WorkspaceSidebar from './components/WorkspaceSidebar.jsx';
+import ShareDialog from './components/ShareDialog.jsx';
+import LayoutControls from './components/LayoutControls.jsx';
 
 const DISMISS_KEY = 'archivise:welcome-dismissed:v1';
 
@@ -19,7 +25,10 @@ export default function App() {
   const [importError, setImportError] = useState('');
   const [toast, setToast] = useState('');
   const [adrOpen, setAdrOpen] = useState(false);
-  const [confirm, setConfirm] = useState(null); // { title, message, onConfirm, destructive }
+  const [shareOpen, setShareOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [selection, setSelection] = useState(() => new Set());
+  const [confirm, setConfirm] = useState(null);
   const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
     try { return localStorage.getItem(DISMISS_KEY) === '1'; } catch { return false; }
   });
@@ -27,15 +36,15 @@ export default function App() {
   const baselineFileInputRef = useRef(null);
 
   const showWelcome = !welcomeDismissed && b.components.length === 0 && !b.baseline;
-  const dismissWelcome = () => {
+  const dismissWelcome = useCallback(() => {
     setWelcomeDismissed(true);
     try { localStorage.setItem(DISMISS_KEY, '1'); } catch { /* noop */ }
-  };
+  }, []);
 
-  const showToast = (msg) => {
+  const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 2400);
-  };
+  }, []);
 
   const safeStep = currentStep >= 0 && currentStep < b.simulationSteps.length
     ? b.simulationSteps[currentStep]
@@ -48,14 +57,52 @@ export default function App() {
   const filenameBase = (b.title || 'architecture')
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'architecture';
 
+  // --- Selection helpers (purge ids that no longer exist) ---
+  useEffect(() => {
+    if (selection.size === 0) return;
+    const valid = new Set(b.components.map((c) => c.id));
+    let changed = false;
+    const next = new Set();
+    selection.forEach((id) => { if (valid.has(id)) next.add(id); else changed = true; });
+    if (changed) setSelection(next);
+  }, [b.components, selection]);
+
+  const toggleSelect = useCallback((id) => {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelection(new Set()), []);
+
+  // --- Consume shared architecture from URL on first load ---
+  const consumedShareRef = useRef(false);
+  useEffect(() => {
+    if (consumedShareRef.current) return;
+    consumedShareRef.current = true;
+    const token = readShareFromLocation();
+    if (!token) return;
+    (async () => {
+      try {
+        const data = await unpackShare(token);
+        b.importJson(JSON.stringify(data), { asBaseline: false });
+        clearShareInLocation();
+        dismissWelcome();
+        showToast('Loaded architecture from shared link');
+      } catch (e) {
+        setImportError(`Shared link is invalid: ${e.message || 'unknown error'}`);
+        clearShareInLocation();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const downloadBlob = (blob, filename) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
@@ -87,17 +134,17 @@ export default function App() {
     if (b.components.length === 0 && !b.baseline) { b.reset(); return; }
     setConfirm({
       title: 'Clear everything?',
-      message: 'This removes all components, connections, custom types, and any captured baseline. It cannot be undone.',
+      message: 'This removes all components, connections, custom types, and any captured baseline. You can undo with ⌘Z.',
       destructive: true,
       confirmLabel: 'Yes, clear everything',
-      onConfirm: () => { b.reset(); setConfirm(null); setMode('build'); showToast('Cleared'); }
+      onConfirm: () => { b.reset(); setConfirm(null); setMode('build'); clearSelection(); showToast('Cleared'); }
     });
   };
 
   const askRestoreBaseline = () => {
     setConfirm({
       title: 'Restore baseline?',
-      message: 'Your current changes will be replaced with the baseline architecture. This cannot be undone.',
+      message: 'Your current changes will be replaced with the baseline architecture. You can undo with ⌘Z.',
       destructive: true,
       confirmLabel: 'Yes, restore',
       onConfirm: () => { b.restoreBaseline(); setConfirm(null); showToast('Restored to baseline'); }
@@ -114,10 +161,74 @@ export default function App() {
     });
   };
 
+  const askBulkDelete = () => {
+    const ids = [...selection];
+    if (!ids.length) return;
+    setConfirm({
+      title: `Delete ${ids.length} component${ids.length === 1 ? '' : 's'}?`,
+      message: 'Connections touching them will also be removed. You can undo with ⌘Z.',
+      destructive: true,
+      confirmLabel: `Yes, delete ${ids.length}`,
+      onConfirm: () => {
+        b.removeComponents(ids);
+        clearSelection();
+        setConfirm(null);
+        showToast(`Deleted ${ids.length} component${ids.length === 1 ? '' : 's'}`);
+      }
+    });
+  };
+
+  const bulkRecolor = (color) => {
+    const ids = [...selection];
+    if (!ids.length) return;
+    b.applyToComponents(ids, { color });
+    showToast(`Recoloured ${ids.length} component${ids.length === 1 ? '' : 's'}`);
+  };
+
   const captureBaselineWithToast = () => {
     b.captureBaseline();
     showToast('Baseline captured — make changes to see the diff');
   };
+
+  const saveCurrentAsDoc = () => {
+    const name = window.prompt('Name this architecture:', b.title || 'Untitled');
+    if (!name) return;
+    b.saveAsDoc(name.trim());
+    showToast(`Saved "${name.trim()}"`);
+  };
+
+  const newDocAction = () => {
+    b.newDoc();
+    clearSelection();
+    setMode('build');
+    showToast('New blank architecture');
+  };
+
+  // --- Keyboard shortcuts --------------------------------------------------
+  const shortcuts = useMemo(() => ({
+    'mod+z': () => { if (b.canUndo) { b.undo(); showToast('Undo'); } },
+    'mod+shift+z': () => { if (b.canRedo) { b.redo(); showToast('Redo'); } },
+    'mod+y': () => { if (b.canRedo) { b.redo(); showToast('Redo'); } },
+    'mod+s': () => {
+      if (b.activeDocId) { b.saveActiveDoc(); showToast('Saved'); }
+      else { saveCurrentAsDoc(); }
+    },
+    'mod+e': () => setAdrOpen(true),
+    'mod+k': () => setWorkspaceOpen((v) => !v),
+    'mod+/': () => setShareOpen(true),
+    '1': () => setMode('build'),
+    '2': () => { if (b.simulationSteps.length) { setMode('simulate'); setCurrentStep(-1); } },
+    '3': () => setMode('diff'),
+    'Escape': () => {
+      if (shareOpen) setShareOpen(false);
+      else if (adrOpen) setAdrOpen(false);
+      else if (workspaceOpen) setWorkspaceOpen(false);
+      else if (confirm) setConfirm(null);
+      else if (selection.size) clearSelection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [b.canUndo, b.canRedo, b.activeDocId, b.simulationSteps.length, shareOpen, adrOpen, workspaceOpen, confirm, selection.size]);
+  useKeyboardShortcuts(shortcuts);
 
   const diffCount = b.diff
     ? (b.diff.components.added.length + b.diff.components.removed.length + b.diff.components.modified.length
@@ -125,62 +236,62 @@ export default function App() {
       + (b.diff.title ? 1 : 0))
     : 0;
 
+  const getArchitecture = useCallback(() => JSON.parse(b.exportJson()), [b]);
+
   return (
     <div className="app">
       <header className="app-header">
-        <div>
+        <div className="app-title">
           <h1>Archivise</h1>
           <p className="tagline">
             Click blocks. Wire them up. Get a real Mermaid diagram, simulation, diff, and ADR — instantly.
           </p>
         </div>
         <div className="header-actions">
-          <div className="btn-group" title="View modes">
-            <button
-              type="button"
-              className={`secondary-btn ${mode === 'build' ? 'active' : ''}`}
-              onClick={() => setMode('build')}
-              title="Edit your architecture"
-            >🧱 Build</button>
-            <button
-              type="button"
-              className={`secondary-btn ${mode === 'simulate' ? 'active' : ''}`}
+          <div className="btn-group" title="View modes (1 / 2 / 3)">
+            <button type="button" className={`secondary-btn ${mode === 'build' ? 'active' : ''}`}
+              onClick={() => setMode('build')} title="Edit your architecture (1)">🧱 Build</button>
+            <button type="button" className={`secondary-btn ${mode === 'simulate' ? 'active' : ''}`}
               onClick={() => { setMode('simulate'); setCurrentStep(-1); }}
               disabled={b.simulationSteps.length === 0}
-              title={b.simulationSteps.length === 0 ? 'Add at least one connection to simulate' : 'Walk through the flow step-by-step'}
+              title={b.simulationSteps.length === 0 ? 'Add at least one connection to simulate' : 'Walk through the flow step-by-step (2)'}
             >▶ Simulate</button>
-            <button
-              type="button"
-              className={`secondary-btn ${mode === 'diff' ? 'active' : ''}`}
-              onClick={() => setMode('diff')}
-              title="Compare current to a captured baseline"
-            >
-              🔍 Diff{b.baseline ? ` (${diffCount})` : ''}
-            </button>
+            <button type="button" className={`secondary-btn ${mode === 'diff' ? 'active' : ''}`}
+              onClick={() => setMode('diff')} title="Compare current to a captured baseline (3)"
+            >🔍 Diff{b.baseline ? ` (${diffCount})` : ''}</button>
           </div>
 
-          <div className="btn-group" title="Import / export">
+          <div className="btn-group" title="Undo / redo">
+            <button type="button" className="icon-btn" onClick={b.undo} disabled={!b.canUndo}
+              title="Undo (⌘Z)" aria-label="Undo">↶</button>
+            <button type="button" className="icon-btn" onClick={b.redo} disabled={!b.canRedo}
+              title="Redo (⌘⇧Z)" aria-label="Redo">↷</button>
+          </div>
+
+          <LayoutControls
+            layoutDir={b.layoutDir} setLayoutDir={b.setLayoutDir}
+            useSubgraphs={b.useSubgraphs} setUseSubgraphs={b.setUseSubgraphs}
+          />
+
+          <div className="btn-group" title="Import / export / share">
             <button type="button" className="secondary-btn" onClick={() => triggerImport(false)}
               title="Load a previously exported .archivise.json file">⬆ Import</button>
             <button type="button" className="secondary-btn" onClick={() => triggerImport(true)}
               title="Load an existing architecture as the baseline to compare against">⬆ As baseline</button>
             <button type="button" className="secondary-btn" onClick={downloadJson}
               title="Save your full architecture to a JSON file">⬇ JSON</button>
-            <button
-              type="button"
-              className="primary-btn small"
-              onClick={() => setAdrOpen(true)}
+            <button type="button" className="secondary-btn" onClick={() => setShareOpen(true)}
               disabled={b.components.length === 0}
-              title="Generate an Architecture Decision Record in Markdown"
-            >📝 Generate ADR</button>
+              title="Get a shareable URL anyone can open in their browser (⌘/)">🔗 Share</button>
+            <button type="button" className="primary-btn small" onClick={() => setAdrOpen(true)}
+              disabled={b.components.length === 0}
+              title="Generate an Architecture Decision Record (⌘E)">📝 Generate ADR</button>
           </div>
 
-          <button type="button" className="secondary-btn" onClick={b.loadSample} title="Load a worked example">
-            ✨ Sample
-          </button>
-          <button type="button" className="danger-btn" onClick={askClearAll} title="Clear everything">
-            🗑 Clear
-          </button>
+          <button type="button" className="secondary-btn" onClick={() => setWorkspaceOpen(true)}
+            title="Open saved architectures (⌘K)">📚 Workspace</button>
+          <button type="button" className="secondary-btn" onClick={b.loadSample} title="Load a worked example">✨ Sample</button>
+          <button type="button" className="danger-btn" onClick={askClearAll} title="Clear everything">🗑 Clear</button>
         </div>
       </header>
 
@@ -220,7 +331,9 @@ export default function App() {
           onChange={(e) => b.setTitle(e.target.value)}
           placeholder="e.g. Customer Onboarding"
         />
-        <span className="autosave-pill" title="Your work auto-saves to this browser">💾 Auto-saved</span>
+        <span className="autosave-pill" title={b.activeDocId ? 'Linked to a saved workspace doc' : 'Your work auto-saves to this browser'}>
+          💾 {b.activeDocId ? 'Saved to workspace' : 'Auto-saved'}
+        </span>
       </section>
 
       <main className="layout">
@@ -258,6 +371,12 @@ export default function App() {
                 allTypes={b.allTypes}
                 onUpdate={b.updateComponent}
                 onRemove={b.removeComponent}
+                onReorder={b.reorderComponents}
+                selectedIds={selection}
+                onToggleSelect={toggleSelect}
+                onClearSelection={clearSelection}
+                onBulkRemove={askBulkDelete}
+                onBulkColor={bulkRecolor}
               />
               <ConnectionList
                 components={b.components}
@@ -269,7 +388,9 @@ export default function App() {
                 onDuplicate={b.duplicateConnection}
                 onSwap={b.swapConnection}
                 onMove={b.moveConnection}
+                onReorder={b.reorderConnections}
               />
+              <LintsPanel lints={b.lints} />
               {b.components.length > 0 && !b.baseline && (
                 <div className="hint-card">
                   💡 <strong>Tip:</strong> About to refactor? Click <em>🔍 Diff</em> and capture this as your <strong>baseline</strong> first — Archivise will track every change you make from here.
@@ -294,7 +415,10 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        <span>Diagrams by Mermaid · No AI, no API key required · State auto-saves to your browser</span>
+        <span>
+          Diagrams by Mermaid · No AI, no API key required · State auto-saves to your browser ·
+          Shortcuts: ⌘Z undo · ⌘⇧Z redo · ⌘E ADR · ⌘K workspace · ⌘/ share · 1/2/3 views
+        </span>
       </footer>
 
       <AdrDialog
@@ -310,6 +434,32 @@ export default function App() {
         filenameBase={filenameBase}
       />
 
+      <ShareDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        getArchitecture={getArchitecture}
+      />
+
+      <WorkspaceSidebar
+        open={workspaceOpen}
+        onClose={() => setWorkspaceOpen(false)}
+        docs={b.docs}
+        activeDocId={b.activeDocId}
+        currentTitle={b.title}
+        onLoad={(id) => { b.loadDoc(id); clearSelection(); setWorkspaceOpen(false); showToast('Loaded'); }}
+        onRename={(id, name) => { b.renameDoc(id, name); showToast('Renamed'); }}
+        onDuplicate={(id) => { b.duplicateDoc(id); showToast('Duplicated'); }}
+        onDelete={(id) => setConfirm({
+          title: 'Delete this saved architecture?',
+          message: 'This only deletes the saved copy. The currently open diagram is not affected.',
+          destructive: true,
+          confirmLabel: 'Yes, delete',
+          onConfirm: () => { b.deleteDoc(id); setConfirm(null); showToast('Deleted'); }
+        })}
+        onSaveCurrent={saveCurrentAsDoc}
+        onNewDoc={newDocAction}
+      />
+
       <ConfirmDialog
         open={!!confirm}
         title={confirm?.title}
@@ -320,9 +470,9 @@ export default function App() {
         onCancel={() => setConfirm(null)}
       />
 
-      {toast && (
-        <div className="toast" role="status">{toast}</div>
-      )}
+      <div className="toast-region" role="status" aria-live="polite" aria-atomic="true">
+        {toast && <div className="toast">{toast}</div>}
+      </div>
     </div>
   );
 }

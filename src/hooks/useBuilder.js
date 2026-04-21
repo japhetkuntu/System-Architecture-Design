@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const STORAGE_KEY = 'archivise:state:v1';
-const BASELINE_KEY = 'archivise:baseline:v1';
+const STATE_KEY     = 'archivise:state:v1';
+const BASELINE_KEY  = 'archivise:baseline:v1';
+const DOCS_KEY      = 'archivise:docs:v1';
+const ACTIVE_DOC_KEY = 'archivise:active-doc:v1';
+const SETTINGS_KEY  = 'archivise:settings:v1';
 
-function loadStoredState() {
+const MAX_HISTORY = 60;
+
+// ---- Storage helpers ----------------------------------------------------
+function loadJson(key) {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
@@ -15,18 +21,12 @@ function loadStoredState() {
     return null;
   }
 }
-
-function loadStoredBaseline() {
-  if (typeof window === 'undefined') return null;
+function saveJson(key, value) {
+  if (typeof window === 'undefined') return;
   try {
-    const raw = window.localStorage.getItem(BASELINE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+    if (value === null || value === undefined) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, JSON.stringify(value));
+  } catch { /* ignore quota */ }
 }
 
 // ---- Default component types --------------------------------------------
@@ -58,9 +58,11 @@ export const RELATIONSHIPS = [
   { id: 'notifies',    label: 'notifies' }
 ];
 
+// ---- ID generation ------------------------------------------------------
 let nextId = 1;
 const newId = () => `c${nextId++}`;
 
+// ---- Slug / label helpers ----------------------------------------------
 function slugify(name, fallback) {
   const base = (name || fallback || 'node')
     .toLowerCase()
@@ -85,18 +87,20 @@ function shapeNode(id, label, shape) {
   }
 }
 
+// ---- Edge merging (pure) -----------------------------------------------
 export function mergeEdges(connections) {
   const map = new Map();
   const order = [];
   connections.forEach((conn) => {
     const key = `${conn.fromId}=>${conn.toId}`;
     if (!map.has(key)) {
-      map.set(key, { fromId: conn.fromId, toId: conn.toId, labels: [], connIds: [] });
+      map.set(key, { fromId: conn.fromId, toId: conn.toId, labels: [], notes: [], connIds: [] });
       order.push(key);
     }
     const rel = RELATIONSHIPS.find((r) => r.id === conn.kind);
     const lbl = conn.label || rel?.label || '';
     if (lbl) map.get(key).labels.push(lbl);
+    if (conn.note) map.get(key).notes.push(conn.note);
     map.get(key).connIds.push(conn.id);
   });
   return order.map((k) => map.get(k));
@@ -113,12 +117,13 @@ function hexLight(hex) {
   return `#${mix(r).toString(16).padStart(2, '0')}${mix(g).toString(16).padStart(2, '0')}${mix(b).toString(16).padStart(2, '0')}`;
 }
 
-export function buildMermaid({ components, mergedEdges, allTypes }) {
+// ---- Mermaid builder (pure) --------------------------------------------
+export function buildMermaid({ components, mergedEdges, allTypes, layoutDir = 'LR', useSubgraphs = true }) {
   if (!components.length) {
-    return 'flowchart LR\n  empty["Add components from the palette to see your diagram"]';
+    return `flowchart ${layoutDir}\n  empty["Add components from the palette to see your diagram"]`;
   }
 
-  const lines = ['flowchart LR'];
+  const lines = [`flowchart ${layoutDir}`];
 
   const used = new Set();
   const idMap = {};
@@ -131,35 +136,42 @@ export function buildMermaid({ components, mergedEdges, allTypes }) {
     idMap[c.id] = cand;
   });
 
-  const grouped = {};
-  components.forEach((c) => {
-    const g = allTypes[c.type]?.group || 'Other';
-    (grouped[g] = grouped[g] || []).push(c);
-  });
+  const renderNode = (c, indent) => {
+    const def = allTypes[c.type];
+    const baseName = c.name || def?.label || 'Component';
+    const icon = c.icon || def?.icon || '';
+    const display = icon ? `${icon} ${baseName}` : baseName;
+    const label = c.notes ? `${display}\\n(${c.notes})` : display;
+    lines.push(`${indent}${shapeNode(idMap[c.id], label, def?.shape || 'rect')}`);
+  };
 
-  const orderedGroups = [
-    ...GROUP_ORDER.filter((g) => grouped[g]),
-    ...Object.keys(grouped).filter((g) => !GROUP_ORDER.includes(g))
-  ];
-
-  orderedGroups.forEach((g) => {
-    lines.push(`  subgraph ${slugify(g)}["${g}"]`);
-    grouped[g].forEach((c) => {
-      const def = allTypes[c.type];
-      const baseName = c.name || def?.label || 'Component';
-      const icon = c.icon || def?.icon || '';
-      const display = icon ? `${icon} ${baseName}` : baseName;
-      const label = c.notes ? `${display}\\n(${c.notes})` : display;
-      lines.push(`    ${shapeNode(idMap[c.id], label, def?.shape || 'rect')}`);
+  if (useSubgraphs) {
+    const grouped = {};
+    components.forEach((c) => {
+      const g = allTypes[c.type]?.group || 'Other';
+      (grouped[g] = grouped[g] || []).push(c);
     });
-    lines.push('  end');
-  });
+    const orderedGroups = [
+      ...GROUP_ORDER.filter((g) => grouped[g]),
+      ...Object.keys(grouped).filter((g) => !GROUP_ORDER.includes(g))
+    ];
+    orderedGroups.forEach((g) => {
+      lines.push(`  subgraph ${slugify(g)}["${g}"]`);
+      grouped[g].forEach((c) => renderNode(c, '    '));
+      lines.push('  end');
+    });
+  } else {
+    components.forEach((c) => renderNode(c, '  '));
+  }
 
   mergedEdges.forEach((e) => {
     const from = idMap[e.fromId];
     const to = idMap[e.toId];
     if (!from || !to) return;
-    const label = e.labels.length ? e.labels.join(' • ') : '';
+    const parts = [];
+    if (e.labels.length) parts.push(e.labels.join(' • '));
+    if (e.notes && e.notes.length) parts.push(`📝 ${e.notes.join(' · ')}`);
+    const label = parts.join(' — ');
     if (label) {
       lines.push(`  ${from} -->|"${escapeLabel(label)}"| ${to}`);
     } else {
@@ -178,17 +190,14 @@ export function buildMermaid({ components, mergedEdges, allTypes }) {
   return lines.join('\n');
 }
 
-// ---- Diff helpers --------------------------------------------------------
+// ---- Diff helpers -------------------------------------------------------
 const COMP_FIELDS = ['type', 'name', 'notes', 'icon', 'color'];
-const CONN_FIELDS = ['fromId', 'toId', 'kind', 'label'];
+const CONN_FIELDS = ['fromId', 'toId', 'kind', 'label', 'note'];
 
 function diffItems(baseList, currList, fields) {
   const baseMap = new Map(baseList.map((x) => [x.id, x]));
   const currMap = new Map(currList.map((x) => [x.id, x]));
-  const added = [];
-  const removed = [];
-  const modified = [];
-  const unchanged = [];
+  const added = [], removed = [], modified = [], unchanged = [];
   currList.forEach((c) => {
     const b = baseMap.get(c.id);
     if (!b) { added.push(c); return; }
@@ -205,7 +214,7 @@ function diffItems(baseList, currList, fields) {
   return { added, removed, modified, unchanged };
 }
 
-function computeDiff(baseline, current) {
+export function computeDiff(baseline, current) {
   if (!baseline) return null;
   return {
     title: baseline.title !== current.title ? { from: baseline.title, to: current.title } : null,
@@ -214,10 +223,8 @@ function computeDiff(baseline, current) {
   };
 }
 
-function buildDiffMermaid({ baseline, current, allTypes }) {
+export function buildDiffMermaid({ baseline, current, allTypes, layoutDir = 'LR', useSubgraphs = true }) {
   if (!baseline) return '';
-
-  // Union components by id (current wins for label)
   const compMap = new Map();
   baseline.components.forEach((c) => compMap.set(c.id, { ...c, _origin: 'baseline' }));
   current.components.forEach((c) => {
@@ -225,7 +232,7 @@ function buildDiffMermaid({ baseline, current, allTypes }) {
     compMap.set(c.id, { ...c, _origin: existing ? 'both' : 'current' });
   });
   const unionComponents = Array.from(compMap.values());
-  if (!unionComponents.length) return 'flowchart LR\n  empty["No components yet"]';
+  if (!unionComponents.length) return `flowchart ${layoutDir}\n  empty["No components yet"]`;
 
   const baseCompMap = new Map(baseline.components.map((c) => [c.id, c]));
   const currCompMap = new Map(current.components.map((c) => [c.id, c]));
@@ -237,11 +244,9 @@ function buildDiffMermaid({ baseline, current, allTypes }) {
     if (!inB && inC) return 'added';
     const b = baseCompMap.get(id);
     const c = currCompMap.get(id);
-    const changed = COMP_FIELDS.some((f) => (b[f] || '') !== (c[f] || ''));
-    return changed ? 'modified' : 'unchanged';
+    return COMP_FIELDS.some((f) => (b[f] || '') !== (c[f] || '')) ? 'modified' : 'unchanged';
   };
 
-  // id -> mermaid id
   const used = new Set();
   const idMap = {};
   unionComponents.forEach((c) => {
@@ -253,43 +258,47 @@ function buildDiffMermaid({ baseline, current, allTypes }) {
     idMap[c.id] = cand;
   });
 
-  const lines = ['flowchart LR'];
+  const lines = [`flowchart ${layoutDir}`];
   lines.push('  classDef added fill:#dcfce7,stroke:#16a34a,color:#14532d,stroke-width:2px');
   lines.push('  classDef removed fill:#fee2e2,stroke:#dc2626,color:#7f1d1d,stroke-width:2px,stroke-dasharray:5 3');
   lines.push('  classDef modified fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:2px');
   lines.push('  classDef unchanged fill:#f1f5f9,stroke:#94a3b8,color:#334155');
 
-  const grouped = {};
-  unionComponents.forEach((c) => {
-    const g = allTypes[c.type]?.group || 'Other';
-    (grouped[g] = grouped[g] || []).push(c);
-  });
-  const orderedGroups = [
-    ...GROUP_ORDER.filter((g) => grouped[g]),
-    ...Object.keys(grouped).filter((g) => !GROUP_ORDER.includes(g))
-  ];
-  orderedGroups.forEach((g) => {
-    lines.push(`  subgraph ${slugify(g)}["${g}"]`);
-    grouped[g].forEach((c) => {
-      const def = allTypes[c.type];
-      const baseName = c.name || def?.label || 'Component';
-      const icon = c.icon || def?.icon || '';
-      const status = compStatus(c.id);
-      const tag = status === 'added' ? '+ ' : status === 'removed' ? '- ' : status === 'modified' ? '~ ' : '';
-      const display = icon ? `${tag}${icon} ${baseName}` : `${tag}${baseName}`;
-      const label = c.notes ? `${display}\\n(${c.notes})` : display;
-      lines.push(`    ${shapeNode(idMap[c.id], label, def?.shape || 'rect')}`);
-    });
-    lines.push('  end');
-  });
+  const renderNode = (c, indent) => {
+    const def = allTypes[c.type];
+    const baseName = c.name || def?.label || 'Component';
+    const icon = c.icon || def?.icon || '';
+    const status = compStatus(c.id);
+    const tag = status === 'added' ? '+ ' : status === 'removed' ? '- ' : status === 'modified' ? '~ ' : '';
+    const display = icon ? `${tag}${icon} ${baseName}` : `${tag}${baseName}`;
+    const label = c.notes ? `${display}\\n(${c.notes})` : display;
+    lines.push(`${indent}${shapeNode(idMap[c.id], label, def?.shape || 'rect')}`);
+  };
 
-  // Edges: union by (fromId,toId,kind,label)
-  const edgeKey = (e) => `${e.fromId}|${e.toId}|${e.kind}|${e.label || ''}`;
+  if (useSubgraphs) {
+    const grouped = {};
+    unionComponents.forEach((c) => {
+      const g = allTypes[c.type]?.group || 'Other';
+      (grouped[g] = grouped[g] || []).push(c);
+    });
+    const orderedGroups = [
+      ...GROUP_ORDER.filter((g) => grouped[g]),
+      ...Object.keys(grouped).filter((g) => !GROUP_ORDER.includes(g))
+    ];
+    orderedGroups.forEach((g) => {
+      lines.push(`  subgraph ${slugify(g)}["${g}"]`);
+      grouped[g].forEach((c) => renderNode(c, '    '));
+      lines.push('  end');
+    });
+  } else {
+    unionComponents.forEach((c) => renderNode(c, '  '));
+  }
+
+  const edgeKey = (e) => `${e.fromId}|${e.toId}|${e.kind}|${e.label || ''}|${e.note || ''}`;
   const baseEdges = new Map(baseline.connections.map((e) => [edgeKey(e), e]));
   const currEdges = new Map(current.connections.map((e) => [edgeKey(e), e]));
   const allKeys = Array.from(new Set([...baseEdges.keys(), ...currEdges.keys()]));
 
-  // Group edges by (from,to) and status for label merging
   const grouping = new Map();
   allKeys.forEach((k) => {
     const inB = baseEdges.has(k);
@@ -329,8 +338,104 @@ function buildDiffMermaid({ baseline, current, allTypes }) {
   return lines.join('\n');
 }
 
+// ---- Validation / lints (pure) ------------------------------------------
+export function runLints({ components, connections }) {
+  const lints = [];
+
+  // Duplicate names
+  const nameCounts = new Map();
+  components.forEach((c) => {
+    const n = (c.name || '').trim().toLowerCase();
+    if (!n) return;
+    nameCounts.set(n, (nameCounts.get(n) || 0) + 1);
+  });
+  nameCounts.forEach((count, name) => {
+    if (count > 1) {
+      lints.push({
+        severity: 'warn',
+        code: 'duplicate-name',
+        message: `${count} components share the name "${name}". Consider renaming for clarity.`
+      });
+    }
+  });
+
+  // Orphans (no incoming or outgoing edges)
+  const connected = new Set();
+  connections.forEach((e) => { connected.add(e.fromId); connected.add(e.toId); });
+  components.forEach((c) => {
+    if (!connected.has(c.id)) {
+      lints.push({
+        severity: 'info',
+        code: 'orphan',
+        componentId: c.id,
+        message: `"${c.name || c.id}" is not connected to anything.`
+      });
+    }
+  });
+
+  // Empty names
+  components.forEach((c) => {
+    if (!(c.name || '').trim()) {
+      lints.push({
+        severity: 'warn',
+        code: 'empty-name',
+        componentId: c.id,
+        message: `A ${c.type} component has no name.`
+      });
+    }
+  });
+
+  // Cycles (directed). Detect via DFS.
+  const adj = new Map();
+  components.forEach((c) => adj.set(c.id, []));
+  connections.forEach((e) => {
+    if (adj.has(e.fromId) && adj.has(e.toId)) adj.get(e.fromId).push(e.toId);
+  });
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const color = new Map(components.map((c) => [c.id, WHITE]));
+  const cycles = [];
+  const stack = [];
+  const dfs = (u) => {
+    color.set(u, GRAY);
+    stack.push(u);
+    for (const v of adj.get(u) || []) {
+      if (color.get(v) === GRAY) {
+        const idx = stack.indexOf(v);
+        cycles.push(stack.slice(idx).concat(v));
+      } else if (color.get(v) === WHITE) dfs(v);
+    }
+    stack.pop();
+    color.set(u, BLACK);
+  };
+  components.forEach((c) => { if (color.get(c.id) === WHITE) dfs(c.id); });
+  cycles.slice(0, 3).forEach((cyc) => {
+    const byId = new Map(components.map((c) => [c.id, c]));
+    const names = cyc.map((id) => byId.get(id)?.name || id).join(' → ');
+    lints.push({
+      severity: 'info',
+      code: 'cycle',
+      message: `Cycle detected: ${names}. Cycles aren't always wrong, but verify this is intended.`
+    });
+  });
+
+  // Invalid references (defensive)
+  const compIds = new Set(components.map((c) => c.id));
+  connections.forEach((e) => {
+    if (!compIds.has(e.fromId) || !compIds.has(e.toId)) {
+      lints.push({
+        severity: 'error',
+        code: 'dangling-connection',
+        message: `Connection ${e.id} points to a missing component.`
+      });
+    }
+  });
+
+  return lints;
+}
+
+// ---- The hook -----------------------------------------------------------
 export function useBuilder() {
-  const stored = loadStoredState();
+  const stored = loadJson(STATE_KEY);
   if (stored && typeof stored.nextId === 'number' && stored.nextId > nextId) {
     nextId = stored.nextId;
   }
@@ -339,90 +444,190 @@ export function useBuilder() {
   const [connections, setConnections] = useState(() => stored?.connections ?? []);
   const [customTypes, setCustomTypes] = useState(() => stored?.customTypes ?? {});
   const [title, setTitle] = useState(() => stored?.title ?? 'My Architecture');
-  const [baseline, setBaseline] = useState(() => loadStoredBaseline());
+  const [baseline, setBaseline] = useState(() => loadJson(BASELINE_KEY));
+
+  // Settings (layout)
+  const storedSettings = loadJson(SETTINGS_KEY) || {};
+  const [layoutDir, setLayoutDir] = useState(storedSettings.layoutDir || 'LR');
+  const [useSubgraphs, setUseSubgraphs] = useState(storedSettings.useSubgraphs !== false);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ title, components, connections, customTypes, nextId })
-      );
-    } catch {
-      // ignore quota errors
-    }
+    saveJson(SETTINGS_KEY, { layoutDir, useSubgraphs });
+  }, [layoutDir, useSubgraphs]);
+
+  // History (undo/redo) — snapshots of the entire editable state.
+  const [past, setPast] = useState([]);
+  const [future, setFuture] = useState([]);
+  const stateRef = useRef({ title, components, connections, customTypes });
+  useEffect(() => {
+    stateRef.current = { title, components, connections, customTypes };
+  }, [title, components, connections, customTypes]);
+
+  const lastCommitRef = useRef({ tag: null, at: 0 });
+
+  // Push a snapshot to `past`. If `tag` matches the previous commit within
+  // 800ms, replace instead of pushing (coalesces rapid typing into one undo).
+  const commit = useCallback((tag = null) => {
+    const now = Date.now();
+    const snap = JSON.parse(JSON.stringify(stateRef.current));
+    setFuture([]);
+    setPast((prev) => {
+      if (tag && lastCommitRef.current.tag === tag && now - lastCommitRef.current.at < 800) {
+        lastCommitRef.current = { tag, at: now };
+        return prev; // coalesce — don't push again
+      }
+      lastCommitRef.current = { tag, at: now };
+      const next = [...prev, snap];
+      return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next;
+    });
+  }, []);
+
+  const applySnap = useCallback((snap) => {
+    setTitle(snap.title);
+    setComponents(snap.components);
+    setConnections(snap.connections);
+    setCustomTypes(snap.customTypes);
+  }, []);
+
+  const undo = useCallback(() => {
+    setPast((p) => {
+      if (!p.length) return p;
+      const snap = p[p.length - 1];
+      setFuture((f) => [JSON.parse(JSON.stringify(stateRef.current)), ...f].slice(0, MAX_HISTORY));
+      applySnap(snap);
+      lastCommitRef.current = { tag: null, at: 0 };
+      return p.slice(0, -1);
+    });
+  }, [applySnap]);
+
+  const redo = useCallback(() => {
+    setFuture((f) => {
+      if (!f.length) return f;
+      const [snap, ...rest] = f;
+      setPast((p) => [...p, JSON.parse(JSON.stringify(stateRef.current))].slice(-MAX_HISTORY));
+      applySnap(snap);
+      lastCommitRef.current = { tag: null, at: 0 };
+      return rest;
+    });
+  }, [applySnap]);
+
+  // Persist state + baseline
+  useEffect(() => {
+    saveJson(STATE_KEY, { title, components, connections, customTypes, nextId });
   }, [title, components, connections, customTypes]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      if (baseline) {
-        window.localStorage.setItem(BASELINE_KEY, JSON.stringify(baseline));
-      } else {
-        window.localStorage.removeItem(BASELINE_KEY);
-      }
-    } catch { /* noop */ }
+    if (baseline) saveJson(BASELINE_KEY, baseline);
+    else saveJson(BASELINE_KEY, null);
   }, [baseline]);
 
   const allTypes = useMemo(() => ({ ...DEFAULT_TYPES, ...customTypes }), [customTypes]);
 
+  // ---------- Mutators (each commits history) ----------
   const addComponent = useCallback((type) => {
-    const def = ({ ...DEFAULT_TYPES, ...customTypes })[type];
+    const def = allTypes[type];
     if (!def) return;
+    commit();
     setComponents((prev) => [
       ...prev,
       {
         id: newId(),
         type,
         name: `${def.label} ${prev.filter((p) => p.type === type).length + 1}`,
-        notes: '',
-        icon: '',
-        color: ''
+        notes: '', icon: '', color: ''
       }
     ]);
-  }, [customTypes]);
+  }, [allTypes, commit]);
 
   const updateComponent = useCallback((id, patch) => {
+    commit(`update-comp-${id}-${Object.keys(patch).join('-')}`);
     setComponents((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }, []);
+  }, [commit]);
 
   const removeComponent = useCallback((id) => {
+    commit();
     setComponents((prev) => prev.filter((c) => c.id !== id));
     setConnections((prev) => prev.filter((c) => c.fromId !== id && c.toId !== id));
-  }, []);
+  }, [commit]);
+
+  const removeComponents = useCallback((ids) => {
+    if (!ids || !ids.length) return;
+    const set = new Set(ids);
+    commit();
+    setComponents((prev) => prev.filter((c) => !set.has(c.id)));
+    setConnections((prev) => prev.filter((c) => !set.has(c.fromId) && !set.has(c.toId)));
+  }, [commit]);
+
+  const applyToComponents = useCallback((ids, patch) => {
+    if (!ids || !ids.length) return;
+    const set = new Set(ids);
+    commit();
+    setComponents((prev) => prev.map((c) => (set.has(c.id) ? { ...c, ...patch } : c)));
+  }, [commit]);
+
+  const moveComponent = useCallback((id, delta) => {
+    commit();
+    setComponents((prev) => {
+      const idx = prev.findIndex((c) => c.id === id);
+      if (idx === -1) return prev;
+      const target = idx + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      const [item] = next.splice(idx, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
+  }, [commit]);
+
+  const reorderComponents = useCallback((fromIdx, toIdx) => {
+    if (fromIdx === toIdx) return;
+    commit();
+    setComponents((prev) => {
+      if (fromIdx < 0 || fromIdx >= prev.length || toIdx < 0 || toIdx >= prev.length) return prev;
+      const next = prev.slice();
+      const [item] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, item);
+      return next;
+    });
+  }, [commit]);
 
   const addConnection = useCallback((conn) => {
     if (!conn.fromId || !conn.toId || conn.fromId === conn.toId) return;
-    setConnections((prev) => [...prev, { id: newId(), kind: 'calls', label: '', ...conn }]);
-  }, []);
+    commit();
+    setConnections((prev) => [...prev, { id: newId(), kind: 'calls', label: '', note: '', ...conn }]);
+  }, [commit]);
 
   const updateConnection = useCallback((id, patch) => {
+    commit(`update-conn-${id}-${Object.keys(patch).join('-')}`);
     setConnections((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }, []);
+  }, [commit]);
 
   const removeConnection = useCallback((id) => {
+    commit();
     setConnections((prev) => prev.filter((c) => c.id !== id));
-  }, []);
+  }, [commit]);
 
   const duplicateConnection = useCallback((id) => {
+    commit();
     setConnections((prev) => {
       const idx = prev.findIndex((c) => c.id === id);
       if (idx === -1) return prev;
-      const src = prev[idx];
-      const copy = { ...src, id: newId() };
+      const copy = { ...prev[idx], id: newId() };
       const next = prev.slice();
       next.splice(idx + 1, 0, copy);
       return next;
     });
-  }, []);
+  }, [commit]);
 
   const swapConnection = useCallback((id) => {
+    commit();
     setConnections((prev) => prev.map((c) =>
       c.id === id ? { ...c, fromId: c.toId, toId: c.fromId } : c
     ));
-  }, []);
+  }, [commit]);
 
   const moveConnection = useCallback((id, delta) => {
+    commit();
     setConnections((prev) => {
       const idx = prev.findIndex((c) => c.id === id);
       if (idx === -1) return prev;
@@ -433,70 +638,78 @@ export function useBuilder() {
       next.splice(target, 0, item);
       return next;
     });
-  }, []);
+  }, [commit]);
+
+  const reorderConnections = useCallback((fromIdx, toIdx) => {
+    if (fromIdx === toIdx) return;
+    commit();
+    setConnections((prev) => {
+      if (fromIdx < 0 || fromIdx >= prev.length || toIdx < 0 || toIdx >= prev.length) return prev;
+      const next = prev.slice();
+      const [item] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, item);
+      return next;
+    });
+  }, [commit]);
 
   const addCustomType = useCallback((def) => {
     const key = `custom_${slugify(def.label, 'type')}_${Date.now().toString(36)}`;
-    const full = {
-      label: def.label || 'Custom',
-      group: def.group || 'Custom',
-      shape: def.shape || 'rect',
-      icon: def.icon || '🧩',
-      color: def.color || '#475569'
-    };
-    setCustomTypes((prev) => ({ ...prev, [key]: full }));
+    commit();
+    setCustomTypes((prev) => ({
+      ...prev,
+      [key]: {
+        label: def.label || 'Custom',
+        group: def.group || 'Custom',
+        shape: def.shape || 'rect',
+        icon: def.icon || '🧩',
+        color: def.color || '#475569'
+      }
+    }));
     return key;
-  }, []);
+  }, [commit]);
 
   const removeCustomType = useCallback((key) => {
+    commit();
     setCustomTypes((prev) => {
       const next = { ...prev };
       delete next[key];
       return next;
     });
-  }, []);
+  }, [commit]);
+
+  const setTitleTracked = useCallback((t) => {
+    commit('title-edit');
+    setTitle(t);
+  }, [commit]);
 
   const reset = useCallback(() => {
+    commit();
     setComponents([]);
     setConnections([]);
     setCustomTypes({});
     setTitle('My Architecture');
     setBaseline(null);
-    if (typeof window !== 'undefined') {
-      try {
-        window.localStorage.removeItem(STORAGE_KEY);
-        window.localStorage.removeItem(BASELINE_KEY);
-      } catch { /* noop */ }
-    }
-  }, []);
+  }, [commit]);
 
-  // ---- Import / Export ---------------------------------------------------
-  const exportJson = useCallback(() => {
-    return JSON.stringify({
-      version: 1,
-      title,
-      components,
-      connections,
-      customTypes,
-      nextId,
-      exportedAt: new Date().toISOString()
-    }, null, 2);
-  }, [title, components, connections, customTypes]);
+  // ---------- Import / Export ----------
+  const exportJson = useCallback(() => JSON.stringify({
+    version: 1,
+    title, components, connections, customTypes, nextId,
+    exportedAt: new Date().toISOString()
+  }, null, 2), [title, components, connections, customTypes]);
 
   const importJson = useCallback((jsonText, { asBaseline = false } = {}) => {
     let data;
-    try {
-      data = typeof jsonText === 'string' ? JSON.parse(jsonText) : jsonText;
-    } catch (e) {
-      throw new Error('Invalid JSON file');
-    }
+    try { data = typeof jsonText === 'string' ? JSON.parse(jsonText) : jsonText; }
+    catch { throw new Error('Invalid JSON file'); }
     if (!data || !Array.isArray(data.components) || !Array.isArray(data.connections)) {
       throw new Error('Not a valid Archivise architecture file');
     }
+    commit();
     const incoming = {
       title: data.title || 'Imported Architecture',
       components: data.components,
-      connections: data.connections,
+      connections: data.connections.map((c) => ({ note: '', ...c })),
       customTypes: data.customTypes || {}
     };
     setTitle(incoming.title);
@@ -514,9 +727,9 @@ export function useBuilder() {
       });
     }
     return incoming;
-  }, []);
+  }, [commit]);
 
-  // ---- Baseline / Diff ---------------------------------------------------
+  // ---------- Baseline ----------
   const captureBaseline = useCallback(() => {
     setBaseline({
       title,
@@ -531,13 +744,15 @@ export function useBuilder() {
 
   const restoreBaseline = useCallback(() => {
     if (!baseline) return;
+    commit();
     setTitle(baseline.title);
     setComponents(JSON.parse(JSON.stringify(baseline.components)));
     setConnections(JSON.parse(JSON.stringify(baseline.connections)));
     setCustomTypes(JSON.parse(JSON.stringify(baseline.customTypes || {})));
-  }, [baseline]);
+  }, [baseline, commit]);
 
   const loadSample = useCallback(() => {
+    commit();
     nextId = 1;
     const c = [
       { id: newId(), type: 'user',     name: 'Customer',                notes: '', icon: '', color: '' },
@@ -551,43 +766,40 @@ export function useBuilder() {
     ];
     setComponents(c);
     setConnections([
-      { id: newId(), fromId: c[0].id, toId: c[1].id, kind: 'uses',       label: '' },
-      { id: newId(), fromId: c[1].id, toId: c[2].id, kind: 'calls',      label: 'register' },
-      { id: newId(), fromId: c[1].id, toId: c[2].id, kind: 'calls',      label: 'login' },
-      { id: newId(), fromId: c[2].id, toId: c[3].id, kind: 'publishes',  label: '' },
-      { id: newId(), fromId: c[4].id, toId: c[3].id, kind: 'consumes',   label: '' },
-      { id: newId(), fromId: c[4].id, toId: c[5].id, kind: 'writes',     label: '' },
-      { id: newId(), fromId: c[4].id, toId: c[6].id, kind: 'writes',     label: 'index user' },
-      { id: newId(), fromId: c[4].id, toId: c[7].id, kind: 'integrates', label: 'create account' },
-      { id: newId(), fromId: c[7].id, toId: c[4].id, kind: 'returns',    label: 'account id' }
+      { id: newId(), fromId: c[0].id, toId: c[1].id, kind: 'uses',       label: '', note: '' },
+      { id: newId(), fromId: c[1].id, toId: c[2].id, kind: 'calls',      label: 'register', note: '' },
+      { id: newId(), fromId: c[1].id, toId: c[2].id, kind: 'calls',      label: 'login', note: '' },
+      { id: newId(), fromId: c[2].id, toId: c[3].id, kind: 'publishes',  label: '', note: 'fire-and-forget' },
+      { id: newId(), fromId: c[4].id, toId: c[3].id, kind: 'consumes',   label: '', note: '' },
+      { id: newId(), fromId: c[4].id, toId: c[5].id, kind: 'writes',     label: '', note: '' },
+      { id: newId(), fromId: c[4].id, toId: c[6].id, kind: 'writes',     label: 'index user', note: '' },
+      { id: newId(), fromId: c[4].id, toId: c[7].id, kind: 'integrates', label: 'create account', note: '' },
+      { id: newId(), fromId: c[7].id, toId: c[4].id, kind: 'returns',    label: 'account id', note: '' }
     ]);
     setTitle('Customer Onboarding');
-  }, []);
+  }, [commit]);
 
+  // ---------- Derived ----------
   const mergedEdges = useMemo(() => mergeEdges(connections), [connections]);
 
   const mermaid = useMemo(
-    () => buildMermaid({ components, mergedEdges, allTypes }),
-    [components, mergedEdges, allTypes]
+    () => buildMermaid({ components, mergedEdges, allTypes, layoutDir, useSubgraphs }),
+    [components, mergedEdges, allTypes, layoutDir, useSubgraphs]
   );
 
-  const simulationSteps = useMemo(() => {
-    return mergedEdges.map((e, idx) => {
-      const from = components.find((c) => c.id === e.fromId);
-      const to = components.find((c) => c.id === e.toId);
-      return {
-        index: idx,
-        fromId: e.fromId,
-        toId: e.toId,
-        fromName: from?.name || '?',
-        toName: to?.name || '?',
-        labels: e.labels,
-        narrative: from && to
-          ? `${from.name} ${e.labels.join(' & ') || 'connects to'} ${to.name}`
-          : ''
-      };
-    });
-  }, [mergedEdges, components]);
+  const simulationSteps = useMemo(() => mergedEdges.map((e, idx) => {
+    const from = components.find((c) => c.id === e.fromId);
+    const to = components.find((c) => c.id === e.toId);
+    return {
+      index: idx,
+      fromId: e.fromId, toId: e.toId,
+      fromName: from?.name || '?', toName: to?.name || '?',
+      labels: e.labels,
+      narrative: from && to
+        ? `${from.name} ${e.labels.join(' & ') || 'connects to'} ${to.name}`
+        : ''
+    };
+  }), [mergedEdges, components]);
 
   const diff = useMemo(
     () => computeDiff(baseline, { title, components, connections }),
@@ -596,11 +808,9 @@ export function useBuilder() {
 
   const diffMermaid = useMemo(
     () => buildDiffMermaid({
-      baseline,
-      current: { title, components, connections },
-      allTypes
+      baseline, current: { title, components, connections }, allTypes, layoutDir, useSubgraphs
     }),
-    [baseline, title, components, connections, allTypes]
+    [baseline, title, components, connections, allTypes, layoutDir, useSubgraphs]
   );
 
   const baselineMermaid = useMemo(() => {
@@ -610,20 +820,126 @@ export function useBuilder() {
     return buildMermaid({
       components: baseline.components || [],
       mergedEdges: merged,
-      allTypes: baselineAllTypes
+      allTypes: baselineAllTypes,
+      layoutDir, useSubgraphs
     });
-  }, [baseline]);
+  }, [baseline, layoutDir, useSubgraphs]);
+
+  const lints = useMemo(
+    () => runLints({ components, connections }),
+    [components, connections]
+  );
+
+  // ---------- Multi-document workspace ----------
+  const loadDocs = () => loadJson(DOCS_KEY) || [];
+  const [docs, setDocsState] = useState(loadDocs);
+  const [activeDocId, setActiveDocId] = useState(() => loadJson(ACTIVE_DOC_KEY)?.id || null);
+
+  const persistDocs = (next) => { setDocsState(next); saveJson(DOCS_KEY, next); };
+  const persistActive = (id) => { setActiveDocId(id); saveJson(ACTIVE_DOC_KEY, { id }); };
+
+  const saveAsDoc = useCallback((name) => {
+    const id = `doc_${Date.now().toString(36)}`;
+    const doc = {
+      id,
+      name: (name || title || 'Untitled').trim(),
+      updatedAt: new Date().toISOString(),
+      state: { title, components, connections, customTypes },
+      baseline
+    };
+    persistDocs([...loadDocs(), doc]);
+    persistActive(id);
+    return id;
+  }, [title, components, connections, customTypes, baseline]);
+
+  const saveActiveDoc = useCallback(() => {
+    const list = loadDocs();
+    if (!activeDocId) return null;
+    const idx = list.findIndex((d) => d.id === activeDocId);
+    if (idx === -1) return null;
+    list[idx] = {
+      ...list[idx],
+      name: title || list[idx].name,
+      updatedAt: new Date().toISOString(),
+      state: { title, components, connections, customTypes },
+      baseline
+    };
+    persistDocs(list);
+    return activeDocId;
+  }, [activeDocId, title, components, connections, customTypes, baseline]);
+
+  const loadDoc = useCallback((id) => {
+    const list = loadDocs();
+    const d = list.find((x) => x.id === id);
+    if (!d) return;
+    commit();
+    setTitle(d.state.title);
+    setComponents(d.state.components);
+    setConnections((d.state.connections || []).map((c) => ({ note: '', ...c })));
+    setCustomTypes(d.state.customTypes || {});
+    setBaseline(d.baseline || null);
+    persistActive(id);
+  }, [commit]);
+
+  const renameDoc = useCallback((id, name) => {
+    const list = loadDocs().map((d) => d.id === id ? { ...d, name: name.trim() || d.name } : d);
+    persistDocs(list);
+  }, []);
+
+  const duplicateDoc = useCallback((id) => {
+    const list = loadDocs();
+    const src = list.find((d) => d.id === id);
+    if (!src) return;
+    const copy = { ...JSON.parse(JSON.stringify(src)), id: `doc_${Date.now().toString(36)}`, name: `${src.name} (copy)`, updatedAt: new Date().toISOString() };
+    persistDocs([...list, copy]);
+    return copy.id;
+  }, []);
+
+  const deleteDoc = useCallback((id) => {
+    const next = loadDocs().filter((d) => d.id !== id);
+    persistDocs(next);
+    if (activeDocId === id) persistActive(null);
+  }, [activeDocId]);
+
+  const newDoc = useCallback(() => {
+    commit();
+    setComponents([]);
+    setConnections([]);
+    setCustomTypes({});
+    setTitle('My Architecture');
+    setBaseline(null);
+    persistActive(null);
+  }, [commit]);
+
+  // Auto-save active doc whenever state changes (debounced via effect dep coalescing)
+  useEffect(() => {
+    if (!activeDocId) return;
+    const handle = setTimeout(() => { saveActiveDoc(); }, 600);
+    return () => clearTimeout(handle);
+  }, [activeDocId, title, components, connections, customTypes, baseline, saveActiveDoc]);
 
   return {
-    title, setTitle,
+    // state
+    title, setTitle: setTitleTracked,
     components, addComponent, updateComponent, removeComponent,
+    removeComponents, applyToComponents, moveComponent, reorderComponents,
     connections, addConnection, updateConnection, removeConnection,
-    duplicateConnection, swapConnection, moveConnection,
+    duplicateConnection, swapConnection, moveConnection, reorderConnections,
     customTypes, allTypes, addCustomType, removeCustomType,
-    mermaid, mergedEdges, simulationSteps,
+    // history
+    undo, redo, canUndo: past.length > 0, canRedo: future.length > 0,
+    // layout
+    layoutDir, setLayoutDir, useSubgraphs, setUseSubgraphs,
+    // derived
+    mermaid, mergedEdges, simulationSteps, lints,
+    // maintenance
     reset, loadSample,
+    // import/export
     exportJson, importJson,
+    // baseline / diff
     baseline, captureBaseline, clearBaseline, restoreBaseline,
-    diff, diffMermaid, baselineMermaid
+    diff, diffMermaid, baselineMermaid,
+    // workspaces
+    docs, activeDocId, saveAsDoc, saveActiveDoc, loadDoc, renameDoc, duplicateDoc, deleteDoc, newDoc
   };
 }

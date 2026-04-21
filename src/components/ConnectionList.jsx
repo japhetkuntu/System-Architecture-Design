@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { RELATIONSHIPS } from '../hooks/useBuilder.js';
+import { makeDragHandlers } from '../utils/dnd.js';
 
 function compLabel(c, allTypes) {
   if (!c) return '?';
@@ -49,7 +50,8 @@ export default function ConnectionList({
   onRemove,
   onDuplicate,
   onSwap,
-  onMove
+  onMove,
+  onReorder
 }) {
   const [draft, setDraft] = useState({ fromId: '', toId: '', kind: 'calls', label: '' });
   const [touchedKind, setTouchedKind] = useState(false);
@@ -253,7 +255,12 @@ export default function ConnectionList({
             const labelText = conn.label || rel?.label || conn.kind;
 
             return (
-              <li key={conn.id} className={`conn-row ${isEditing ? 'editing' : ''}`}>
+              <li
+                key={conn.id}
+                className={`conn-row ${isEditing ? 'editing' : ''}`}
+                {...(onReorder && !filter ? makeDragHandlers({ index: originalIndex, onReorder, type: 'conn' }) : {})}
+              >
+                <span className="conn-drag-handle" title="Drag to reorder" aria-hidden="true">⋮⋮</span>
                 <span className="conn-step" title={`Step ${originalIndex + 1} in simulation`}>
                   {originalIndex + 1}
                 </span>
@@ -273,6 +280,9 @@ export default function ConnectionList({
                       <span className="pill pill-warn" title={`${parallelCount} parallel edges — they will be merged in the diagram`}>
                         ×{parallelCount} parallel
                       </span>
+                    )}
+                    {conn.note && (
+                      <span className="conn-note-inline" title={conn.note}>📝 {conn.note}</span>
                     )}
                   </div>
                 ) : (
@@ -298,6 +308,13 @@ export default function ConnectionList({
                       onChange={(e) => onUpdate(conn.id, { label: e.target.value })}
                       placeholder="Custom label"
                       className="conn-label"
+                    />
+                    <input
+                      type="text"
+                      value={conn.note || ''}
+                      onChange={(e) => onUpdate(conn.id, { note: e.target.value })}
+                      placeholder="📝 Note / annotation (shown on the edge)"
+                      className="conn-note"
                     />
                     <button type="button" className="link-btn" onClick={() => setEditingId(null)}>Done</button>
                   </div>

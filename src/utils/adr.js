@@ -128,7 +128,10 @@ export function generateAdrMarkdown({
   allTypes,
   mermaid,
   baselineMermaid,
-  diffMermaid
+  diffMermaid,
+  alternatives = '',
+  relatedAdrs = '',
+  reviewers = ''
 }) {
   const today = new Date().toISOString().slice(0, 10);
   const adrTitle = title || current?.title || 'Architecture change';
@@ -302,6 +305,34 @@ export function generateAdrMarkdown({
     out.push('```mermaid');
     out.push(diffMermaid);
     out.push('```');
+    out.push('');
+  }
+
+  // Alternatives considered
+  if (alternatives && alternatives.trim()) {
+    out.push('## Alternatives considered');
+    out.push('');
+    out.push(alternatives.trim());
+    out.push('');
+  }
+
+  // Related ADRs
+  if (relatedAdrs && relatedAdrs.trim()) {
+    out.push('## Related ADRs');
+    out.push('');
+    relatedAdrs.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line) => {
+      out.push(`- ${line}`);
+    });
+    out.push('');
+  }
+
+  // Reviewers / sign-off
+  if (reviewers && reviewers.trim()) {
+    out.push('## Reviewers & sign-off');
+    out.push('');
+    reviewers.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line) => {
+      out.push(`- [ ] ${line}`);
+    });
     out.push('');
   }
 

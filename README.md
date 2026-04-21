@@ -10,12 +10,18 @@ It is built for engineers who want to sketch a system, compare it to an earlier 
 
 ## ✨ Highlights
 
-- **Form-first builder** — pick component types from a palette (users, APIs, databases, queues, caches, search, external systems, or your own), name them, give them notes, icons, and colors.
-- **Smart connections** — a chip-arrow-chip UI with live preview, auto-suggested relationships (e.g. *API → Database* defaults to *writes to*), direction swap, duplicate, reorder, and a parallel-edge warning.
-- **Real Mermaid output** — styled `flowchart LR` with grouped subgraphs per domain. Download the diagram as **SVG**, **PNG**, raw **Mermaid code**, or the full architecture as **JSON**.
+- **Form-first builder** — pick component types from a palette (users, APIs, databases, queues, caches, search, external systems, or your own), name them, give them notes, icons, and colors. Drag rows to reorder. Multi-select and bulk-delete / bulk-recolor.
+- **Smart connections** — a chip-arrow-chip UI with live preview, auto-suggested relationships (e.g. *API → Database* defaults to *writes to*), direction swap, duplicate, drag-reorder, per-edge 📝 annotations, and a parallel-edge warning.
+- **Real Mermaid output** — styled `flowchart LR` / `TB` with optional subgraphs per domain. Download as **SVG**, **PNG**, raw **Mermaid code**, or the architecture as **JSON**.
 - **Simulation mode** — step through the flow edge-by-edge; the active path lights up in the diagram and a narrative explains what's happening.
 - **Baseline + diff** — capture a snapshot of "what exists today", keep editing, and see a color-coded diff diagram plus a categorized change list (added / removed / modified, field-level).
-- **ADR generator** — open a dialog, fill four fields, and get a polished Markdown Architecture Decision Record with context, decision, auto-inferred consequences, and before/after/diff Mermaid diagrams. Preview it rendered, then download as `.md` or `README.md`.
+- **ADR generator** — polished Markdown Architecture Decision Record with context, decision, auto-inferred consequences, alternatives considered, related ADRs, reviewers, and before/after/diff Mermaid diagrams rendered inline. Export as `.md`, **self-contained HTML bundle**, or **Print / Save as PDF**.
+- **Undo / redo** — full history with sane coalescing, so ⌘Z works even across keystrokes.
+- **Architecture lints** — inline warnings for orphan nodes, duplicate names, empty labels, short cycles, and dangling connections.
+- **Multi-doc workspace** — keep a library of architectures in your browser; name, rename, duplicate, delete, and switch between them.
+- **Shareable links** — one click produces a URL that restores the exact architecture for anyone who opens it (gzip-compressed into the hash, no server).
+- **Keyboard shortcuts** — ⌘Z / ⌘⇧Z (undo/redo), ⌘E (ADR), ⌘K (workspace), ⌘/ (share), ⌘S (save), `1` / `2` / `3` (build / simulate / diff), `Esc` (close).
+- **Accessible** — keyboard reachable, focus-visible styles, `aria-live` toasts, `prefers-reduced-motion` honored.
 - **Auto-saved** to `localStorage`, including your baseline. Import/export as JSON. Load a worked example in one click.
 - **Zero backend** — the entire app is static and can be hosted on GitHub Pages, Netlify, Vercel, or opened from `dist/` directly.
 
@@ -126,7 +132,12 @@ The export format is versioned — future breaking changes will bump `version` a
 
 ## 🧪 Testing
 
-There is no test runner wired up yet. The pure functions in `useBuilder.js` and `utils/adr.js` are the obvious first candidates. If you add tests, please use [Vitest](https://vitest.dev/) and put them next to the file they test (`useBuilder.test.js`).
+Tests use [Vitest](https://vitest.dev/) with the jsdom environment. The pure logic — edge merging, diagram building, diffing, lints, ADR generation — is covered end-to-end.
+
+```bash
+npm test            # watch mode
+npm run test:run    # one-shot
+```
 
 ---
 
