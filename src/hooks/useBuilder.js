@@ -30,33 +30,120 @@ function saveJson(key, value) {
 }
 
 // ---- Default component types --------------------------------------------
+// Organised the way a senior architect actually whiteboards: clients on the
+// left, edge/security at the front door, compute in the middle, data at the
+// back, messaging on the side, temporal/orchestration as its own plane,
+// observability and external systems on the periphery.
 export const DEFAULT_TYPES = {
-  user:      { label: 'User / Actor',      group: 'Clients',   shape: 'stadium', icon: '👤', color: '#b45309' },
-  frontend:  { label: 'Frontend / Client', group: 'Clients',   shape: 'round',   icon: '🖥️', color: '#1d4ed8' },
-  api:       { label: 'API / Service',     group: 'Backend',   shape: 'rect',    icon: '⚙️', color: '#4338ca' },
-  consumer:  { label: 'Consumer / Worker', group: 'Backend',   shape: 'rect',    icon: '🔄', color: '#6d28d9' },
-  queue:     { label: 'Queue Topic',       group: 'Messaging', shape: 'queue',   icon: '📨', color: '#be185d' },
-  database:  { label: 'Database',          group: 'Data',      shape: 'cyl',     icon: '🗄️', color: '#15803d' },
-  search:    { label: 'Search Engine',     group: 'Data',      shape: 'cyl',     icon: '🔍', color: '#0f766e' },
-  cache:     { label: 'Cache',             group: 'Data',      shape: 'cyl',     icon: '⚡', color: '#a16207' },
-  storage:   { label: 'Object Storage',    group: 'Data',      shape: 'cyl',     icon: '📦', color: '#7c3aed' },
-  external:  { label: 'External API',      group: 'External',  shape: 'rect',    icon: '🌐', color: '#475569' }
+  // Clients
+  user:         { label: 'User / Actor',          group: 'Clients',       shape: 'stadium', icon: '👤', color: '#b45309' },
+  frontend:     { label: 'Frontend / SPA',        group: 'Clients',       shape: 'round',   icon: '🖥️', color: '#1d4ed8' },
+  mobile:       { label: 'Mobile App',            group: 'Clients',       shape: 'round',   icon: '📱', color: '#2563eb' },
+
+  // Edge & security (the AWS "front door")
+  edge:         { label: 'CDN / Edge',            group: 'Edge',          shape: 'hex',     icon: '🌍', color: '#0369a1' },
+  loadbalancer: { label: 'Load Balancer',         group: 'Edge',          shape: 'hex',     icon: '⚖️', color: '#0284c7' },
+  apigateway:   { label: 'API Gateway',           group: 'Edge',          shape: 'hex',     icon: '🚪', color: '#0891b2' },
+  idp:          { label: 'Identity Provider',     group: 'Security',      shape: 'rect',    icon: '🛡️', color: '#9333ea' },
+  secrets:      { label: 'Secrets / KMS',         group: 'Security',      shape: 'rect',    icon: '🔐', color: '#7e22ce' },
+
+  // Compute / backend
+  api:          { label: 'API / Service',         group: 'Backend',       shape: 'rect',    icon: '⚙️', color: '#4338ca' },
+  function:     { label: 'Function / Lambda',     group: 'Backend',       shape: 'round',   icon: 'λ',  color: '#5b21b6' },
+  container:    { label: 'Container / Task',      group: 'Backend',       shape: 'rect',    icon: '🐳', color: '#4f46e5' },
+  consumer:     { label: 'Consumer / Worker',     group: 'Backend',       shape: 'rect',    icon: '🔄', color: '#6d28d9' },
+
+  // Messaging
+  queue:        { label: 'Queue (SQS-style)',     group: 'Messaging',     shape: 'queue',   icon: '📨', color: '#be185d' },
+  topic:        { label: 'Pub/Sub Topic (SNS)',   group: 'Messaging',     shape: 'queue',   icon: '📣', color: '#db2777' },
+
+  // Temporal / orchestration plane (the new group)
+  scheduler:    { label: 'Scheduler / Cron',      group: 'Temporal',      shape: 'stadium', icon: '⏰', color: '#0d9488' },
+  eventbus:     { label: 'Event Bus (EventBridge)', group: 'Temporal',    shape: 'hex',     icon: '🚌', color: '#0f766e' },
+  workflow:     { label: 'Workflow (Step Fn / Temporal)', group: 'Temporal', shape: 'rect', icon: '🧭', color: '#047857' },
+  statemachine: { label: 'State Machine',         group: 'Temporal',      shape: 'rect',    icon: '🔁', color: '#059669' },
+  activity:     { label: 'Activity / Task',       group: 'Temporal',      shape: 'rect',    icon: '🛠️', color: '#10b981' },
+  saga:         { label: 'Saga / Orchestrator',   group: 'Temporal',      shape: 'rect',    icon: '🪢', color: '#15803d' },
+  timer:        { label: 'Timer / Delay',         group: 'Temporal',      shape: 'stadium', icon: '⏲️', color: '#65a30d' },
+  signal:       { label: 'Signal / Webhook',      group: 'Temporal',      shape: 'stadium', icon: '📡', color: '#84cc16' },
+
+  // Data
+  database:     { label: 'Database',              group: 'Data',          shape: 'cyl',     icon: '🗄️', color: '#15803d' },
+  search:       { label: 'Search Index',          group: 'Data',          shape: 'cyl',     icon: '🔍', color: '#0f766e' },
+  cache:        { label: 'Cache',                 group: 'Data',          shape: 'cyl',     icon: '⚡', color: '#a16207' },
+  storage:      { label: 'Object Storage (S3)',   group: 'Data',          shape: 'cyl',     icon: '📦', color: '#7c3aed' },
+  warehouse:    { label: 'Warehouse / Lake',      group: 'Data',          shape: 'cyl',     icon: '📈', color: '#9333ea' },
+  stream:       { label: 'Stream (Kinesis/Kafka)', group: 'Data',         shape: 'queue',   icon: '🌊', color: '#0e7490' },
+
+  // Observability
+  telemetry:    { label: 'Telemetry / Metrics',   group: 'Observability', shape: 'rect',    icon: '📊', color: '#475569' },
+
+  // External systems
+  external:     { label: 'External API',          group: 'External',      shape: 'rect',    icon: '🌐', color: '#475569' }
 };
 
-const GROUP_ORDER = ['Clients', 'Backend', 'Messaging', 'Data', 'External', 'Custom'];
+const GROUP_ORDER = ['Clients', 'Edge', 'Security', 'Backend', 'Messaging', 'Temporal', 'Data', 'Observability', 'External', 'Custom'];
 
+// Relationship vocabulary, organised the way a senior AWS-style architect
+// reads a diagram: synchronous request/response, asynchronous events, the
+// data plane, the temporal/orchestration plane, security, and reliability.
+// `arrow` is a Mermaid edge style: '-->' solid, '-.->' dotted (async/control),
+// '==>' thick (data plane / streams), '--o' open circle (observation/replication),
+// '--x' cross (failover).
 export const RELATIONSHIPS = [
-  { id: 'calls',       label: 'calls' },
-  { id: 'publishes',   label: 'publishes to' },
-  { id: 'consumes',    label: 'consumes from' },
-  { id: 'reads',       label: 'reads from' },
-  { id: 'writes',      label: 'writes to' },
-  { id: 'integrates',  label: 'integrates with' },
-  { id: 'uses',        label: 'uses' },
-  { id: 'sends',       label: 'sends data to' },
-  { id: 'returns',     label: 'returns data to' },
-  { id: 'notifies',    label: 'notifies' }
+  // ── Synchronous (request / response) ─────────────────────────────────────
+  { id: 'calls',       label: 'calls',              category: 'Synchronous', arrow: '-->',  description: 'Generic blocking call (HTTP/gRPC/RPC)' },
+  { id: 'queries',     label: 'queries',            category: 'Synchronous', arrow: '-->',  description: 'Read-only request (GET / GraphQL query)' },
+  { id: 'commands',    label: 'commands',           category: 'Synchronous', arrow: '-->',  description: 'State-changing call (POST / mutation)' },
+  { id: 'invokes',     label: 'invokes',            category: 'Synchronous', arrow: '-->',  description: 'Synchronous function/Lambda invocation' },
+
+  // ── Asynchronous (events / messaging) ────────────────────────────────────
+  { id: 'publishes',   label: 'publishes to',       category: 'Asynchronous', arrow: '-.->', description: 'Publishes event to a topic (SNS/Kafka)' },
+  { id: 'subscribes',  label: 'subscribes to',      category: 'Asynchronous', arrow: '-.->', description: 'Subscribes to a topic / event source' },
+  { id: 'consumes',    label: 'consumes from',      category: 'Asynchronous', arrow: '-.->', description: 'Pulls messages from a queue (SQS-style)' },
+  { id: 'emits',       label: 'emits',              category: 'Asynchronous', arrow: '-.->', description: 'Emits a domain event' },
+  { id: 'notifies',    label: 'notifies',           category: 'Asynchronous', arrow: '-.->', description: 'Push notification (SNS / webhook)' },
+  { id: 'fans-out',    label: 'fans out to',        category: 'Asynchronous', arrow: '-.->', description: 'One source, many parallel targets' },
+
+  // ── Data plane (storage & streaming) ─────────────────────────────────────
+  { id: 'reads',       label: 'reads from',         category: 'Data',         arrow: '-->',  description: 'Reads from a datastore' },
+  { id: 'writes',      label: 'writes to',          category: 'Data',         arrow: '-->',  description: 'Writes to a datastore' },
+  { id: 'caches',      label: 'caches',             category: 'Data',         arrow: '-->',  description: 'Caches results from a slower source' },
+  { id: 'indexes',     label: 'indexes into',       category: 'Data',         arrow: '-->',  description: 'Feeds a search index / projection' },
+  { id: 'streams',     label: 'streams to',         category: 'Data',         arrow: '==>',  description: 'Continuous data plane (Kinesis/Kafka)' },
+  { id: 'replicates',  label: 'replicates to',      category: 'Data',         arrow: '--o',  description: 'Replication target (read replica / DR)' },
+
+  // ── Temporal / orchestration ─────────────────────────────────────────────
+  { id: 'triggers',    label: 'triggers',           category: 'Temporal',     arrow: '-.->', description: 'Event triggers a workflow / function' },
+  { id: 'schedules',   label: 'schedules',          category: 'Temporal',     arrow: '-.->', description: 'Cron-style scheduled execution' },
+  { id: 'orchestrates',label: 'orchestrates',       category: 'Temporal',     arrow: '-.->', description: 'Workflow controls downstream steps' },
+  { id: 'awaits',      label: 'awaits',             category: 'Temporal',     arrow: '-.->', description: 'Awaits signal / timer / completion' },
+  { id: 'compensates', label: 'compensates',        category: 'Temporal',     arrow: '-.->', description: 'Saga rollback / compensation' },
+  { id: 'times-out-to',label: 'times out to',       category: 'Temporal',     arrow: '-.->', description: 'Fallback path on timeout' },
+
+  // ── Security & trust ─────────────────────────────────────────────────────
+  { id: 'authenticates-via', label: 'authenticates via', category: 'Security', arrow: '-->', description: 'Auth handled by IDP (OIDC/SAML)' },
+  { id: 'authorizes-via',    label: 'authorizes via',    category: 'Security', arrow: '-->', description: 'Policy / permissions check' },
+
+  // ── Reliability ──────────────────────────────────────────────────────────
+  { id: 'load-balances-to', label: 'load-balances to', category: 'Reliability', arrow: '-->', description: 'LB distributes traffic across targets' },
+  { id: 'fails-over-to',    label: 'fails over to',    category: 'Reliability', arrow: '--x', description: 'Disaster-recovery / failover target' },
+  { id: 'observes',         label: 'observes',         category: 'Reliability', arrow: '--o', description: 'Telemetry, traces, metrics, logs' },
+
+  // ── Generic (back-compat) ────────────────────────────────────────────────
+  { id: 'integrates',  label: 'integrates with',    category: 'Other',        arrow: '-->',  description: 'Generic integration point' },
+  { id: 'uses',        label: 'uses',               category: 'Other',        arrow: '-->',  description: 'Generic dependency' },
+  { id: 'sends',       label: 'sends data to',      category: 'Other',        arrow: '-->',  description: 'Generic data send' },
+  { id: 'returns',     label: 'returns data to',    category: 'Other',        arrow: '-->',  description: 'Response / callback' }
 ];
+
+export const RELATIONSHIP_CATEGORIES = [
+  'Synchronous', 'Asynchronous', 'Data', 'Temporal', 'Security', 'Reliability', 'Other'
+];
+
+export function getRelationship(id) {
+  return RELATIONSHIPS.find((r) => r.id === id) || RELATIONSHIPS[0];
+}
 
 // ---- ID generation ------------------------------------------------------
 let nextId = 1;
@@ -82,8 +169,31 @@ function shapeNode(id, label, shape) {
     case 'queue':   return `${id}>"${l}"]`;
     case 'round':   return `${id}("${l}")`;
     case 'stadium': return `${id}(["${l}"])`;
+    case 'hex':     return `${id}{{"${l}"}}`;
     case 'rect':
     default:        return `${id}["${l}"]`;
+  }
+}
+
+// Priority for picking a representative arrow when several connections are
+// merged onto one edge: data plane > async/control > observation > failover > sync.
+const ARROW_PRIORITY = { '==>': 5, '-.->': 4, '--o': 3, '--x': 2, '-->': 1 };
+function pickArrow(arrows) {
+  if (!arrows || !arrows.length) return '-->';
+  return arrows.reduce((best, a) => (ARROW_PRIORITY[a] || 0) > (ARROW_PRIORITY[best] || 0) ? a : best, arrows[0]);
+}
+
+// Build a labelled mermaid edge for any of the supported arrow styles.
+function edgeLine(from, to, arrow, label) {
+  const safe = label ? `"${escapeLabel(label)}"` : '';
+  if (!label) return `  ${from} ${arrow} ${to}`;
+  switch (arrow) {
+    case '-.->': return `  ${from} -. ${safe} .-> ${to}`;
+    case '==>':  return `  ${from} == ${safe} ==> ${to}`;
+    case '--o':  return `  ${from} -- ${safe} --o ${to}`;
+    case '--x':  return `  ${from} -- ${safe} --x ${to}`;
+    case '-->':
+    default:     return `  ${from} -->|${safe}| ${to}`;
   }
 }
 
