@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 
 /**
  * Unified workspace browser.
@@ -225,12 +225,6 @@ export default function WorkspaceSidebar({
     } catch (e) { setErr(e?.message || 'Save failed'); }
     finally { setBusy(null); }
   };
-
-  const projectMeta = useMemo(() => {
-    const m = new Map();
-    projects.forEach((p) => m.set(p.id, p));
-    return m;
-  }, [projects]);
 
   const looseList = archByProject.__loose__ || [];
   const totalCloud = Object.values(archByProject).reduce((s, list) => s + list.length, 0);

@@ -943,11 +943,17 @@ export function generateTemporalRedesign({ components, connections, candidates, 
   const newComponents = JSON.parse(JSON.stringify(components));
   let newConnections   = JSON.parse(JSON.stringify(connections));
 
-  // Stable id generator for inserted nodes (avoid colliding with existing ones).
-  let seq = Math.max(0, ...newComponents.map((c) => {
-    const m = /^c(\d+)$/.exec(c.id || '');
+  // Stable id generator for inserted nodes/edges. Must consider BOTH
+  // components AND connections since they share the `c\d+` namespace.
+  const idNum = (s) => {
+    const m = /^c(\d+)$/.exec(s || '');
     return m ? parseInt(m[1], 10) : 0;
-  }));
+  };
+  let seq = Math.max(
+    0,
+    ...newComponents.map((c) => idNum(c.id)),
+    ...newConnections.map((e) => idNum(e.id))
+  );
   const mintId = () => `c${++seq}`;
 
   candidates.forEach((cand) => {
@@ -1027,14 +1033,56 @@ export function generateTemporalRedesign({ components, connections, candidates, 
 
 
 // ---- The hook -----------------------------------------------------------
+
+// Repair stored state where a component and a connection (or two connections)
+// ended up sharing the same `c<n>` id. This happened in older versions when
+// `generateTemporalRedesign` minted ids from components only. We dedupe by
+// reassigning fresh ids to whichever record collides, and rewrite any edge
+// endpoints that referenced the old component id.
+function sanitizeIds(components, connections) {
+  const comps = (components || []).slice();
+  const edges = (connections || []).slice();
+  const seen = new Set();
+  let max = 0;
+  const idNum = (s) => { const m = /^c(\d+)$/.exec(s || ''); return m ? +m[1] : 0; };
+  comps.forEach((c) => { if (c?.id) max = Math.max(max, idNum(c.id)); });
+  edges.forEach((e) => { if (e?.id) max = Math.max(max, idNum(e.id)); });
+  const mint = () => `c${++max}`;
+  const compRemap = new Map();
+
+  for (let i = 0; i < comps.length; i++) {
+    const c = comps[i];
+    if (!c?.id || seen.has(c.id)) {
+      const fresh = mint();
+      if (c?.id) compRemap.set(c.id + '#' + i, fresh); // unused; for clarity
+      comps[i] = { ...c, id: fresh };
+      seen.add(fresh);
+    } else {
+      seen.add(c.id);
+    }
+  }
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i];
+    let next = e;
+    if (!e?.id || seen.has(e.id)) {
+      next = { ...e, id: mint() };
+    }
+    seen.add(next.id);
+    edges[i] = next;
+  }
+  return { components: comps, connections: edges, maxId: max };
+}
+
 export function useBuilder() {
   const stored = loadJson(STATE_KEY);
+  const sanitized = sanitizeIds(stored?.components, stored?.connections);
   if (stored && typeof stored.nextId === 'number' && stored.nextId > nextId) {
     nextId = stored.nextId;
   }
+  if (sanitized.maxId >= nextId) nextId = sanitized.maxId + 1;
 
-  const [components, setComponents] = useState(() => stored?.components ?? []);
-  const [connections, setConnections] = useState(() => stored?.connections ?? []);
+  const [components, setComponents] = useState(() => sanitized.components);
+  const [connections, setConnections] = useState(() => sanitized.connections);
   const [customTypes, setCustomTypes] = useState(() => stored?.customTypes ?? {});
   const [title, setTitle] = useState(() => stored?.title ?? 'My Architecture');
   const [baseline, setBaseline] = useState(() => loadJson(BASELINE_KEY));
@@ -1545,6 +1593,14 @@ export function useBuilder() {
     setBaseline(JSON.parse(JSON.stringify(snapshot)));
     commit('temporal-redesign');
     const next = generateTemporalRedesign({ components, connections, candidates: cands, allTypes });
+    // Make sure subsequent addComponent / addConnection don't reuse ids that
+    // the redesign just minted.
+    const maxN = Math.max(
+      0,
+      ...next.components.map((c) => { const m = /^c(\d+)$/.exec(c.id || ''); return m ? +m[1] : 0; }),
+      ...next.connections.map((e) => { const m = /^c(\d+)$/.exec(e.id || ''); return m ? +m[1] : 0; })
+    );
+    if (maxN >= nextId) nextId = maxN + 1;
     setComponents(next.components);
     setConnections(next.connections);
     return true;
