@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase, supabaseConfigured } from '../lib/supabaseClient.js';
+import dagre from 'dagre';
 
 const STATE_KEY     = 'archivise:state:v1';
 const BASELINE_KEY  = 'archivise:baseline:v1';
@@ -171,54 +172,70 @@ async function moveRemoteArchitectureToProject(id, projectId) {
 // back, messaging on the side, temporal/orchestration as its own plane,
 // observability and external systems on the periphery.
 export const DEFAULT_TYPES = {
-  // Clients
-  user:         { label: 'User / Actor',          group: 'Clients',       shape: 'stadium', icon: '👤', color: '#b45309' },
-  frontend:     { label: 'Frontend / SPA',        group: 'Clients',       shape: 'round',   icon: '🖥️', color: '#1d4ed8' },
-  mobile:       { label: 'Mobile App',            group: 'Clients',       shape: 'round',   icon: '📱', color: '#2563eb' },
+  // ── Hubtel APIs (matching the standard icon set: blue=internal, green=public, pink=external) ──
+  internal_api: { label: 'Internal API',          group: 'APIs',          shape: 'hex',     icon: '🔵', color: '#2875E2' },
+  public_api:   { label: 'Public API',            group: 'APIs',          shape: 'hex',     icon: '🟢', color: '#00994D' },
+  external_api: { label: 'External API',          group: 'APIs',          shape: 'hex',     icon: '🌐', color: '#C0392B' },
 
-  // Edge & security (the AWS "front door")
+  // ── Streaming & messaging ──
+  kafka:          { label: 'Kafka',               group: 'Kafka',         shape: 'rect',    icon: '🟦', color: '#3399FF' },
+  kafka_consumer: { label: 'Kafka Consumer',      group: 'Kafka',         shape: 'rect',    icon: '⚙️', color: '#2875E2' },
+  nifi:           { label: 'Nifi',                group: 'Kafka',         shape: 'rect',    icon: '🔀', color: '#F58534' },
+
+  // ── Storage ──
+  postgres:  { label: 'PostgreSQL',               group: 'Storage',       shape: 'cyl',     icon: '🐘', color: '#3399FF' },
+  mysql:     { label: 'MySQL',                    group: 'Storage',       shape: 'cyl',     icon: '🐬', color: '#3399FF' },
+  sqlserver: { label: 'SQL Server',               group: 'Storage',       shape: 'cyl',     icon: '🗃️', color: '#3399FF' },
+  search:    { label: 'Elasticsearch',            group: 'Storage',       shape: 'cyl',     icon: '🔍', color: '#F58534' },
+  redis:     { label: 'Redis',                    group: 'Storage',       shape: 'cyl',     icon: '⚡', color: '#3399FF' },
+  inmemory:  { label: 'In-memory',                group: 'Storage',       shape: 'rect',    icon: '🧠', color: '#4495D1' },
+  storage:   { label: 'Object Storage (S3)',      group: 'Storage',       shape: 'cyl',     icon: '📦', color: '#E05243' },
+  hdd:       { label: 'Hard Disk',                group: 'Storage',       shape: 'rect',    icon: '💽', color: '#005F4B' },
+
+  // ── Jobs / Scheduler / SDK ──
+  scheduler: { label: 'Scheduler',                group: 'Jobs',          shape: 'stadium', icon: '⏰', color: '#3399FF' },
+  bg_job:    { label: 'Background Job',           group: 'Jobs',          shape: 'rect',    icon: '🛠️', color: '#4D4D4D' },
+  sdk:       { label: 'SDK',                      group: 'Jobs',          shape: 'rect',    icon: '📲', color: '#115193' },
+
+  // ── Users / Devices / Telcos ──
+  customer:  { label: 'Customer',                 group: 'Users',         shape: 'stadium', icon: '🧑', color: '#006600' },
+  admin:     { label: 'Admin',                    group: 'Users',         shape: 'stadium', icon: '👤', color: '#515151' },
+  phone:     { label: 'Phone',                    group: 'Users',         shape: 'round',   icon: '📱', color: '#00188D' },
+  ussd:      { label: 'Cell Tower (USSD)',       group: 'Telcos',        shape: 'rect',    icon: '📡', color: '#6881B3' },
+
+  // ── Front-end ──
+  frontend:  { label: 'Front-end Service',        group: 'Front-end',     shape: 'rect',    icon: '🖥️', color: '#006600' },
+
+  // ── Generic backend / edge / temporal — kept for back-compat, slimmed down ──
+  user:         { label: 'User / Actor',          group: 'Users',         shape: 'stadium', icon: '👤', color: '#b45309' },
+  mobile:       { label: 'Mobile App',            group: 'Users',         shape: 'round',   icon: '📱', color: '#2563eb' },
   edge:         { label: 'CDN / Edge',            group: 'Edge',          shape: 'hex',     icon: '🌍', color: '#0369a1' },
   loadbalancer: { label: 'Load Balancer',         group: 'Edge',          shape: 'hex',     icon: '⚖️', color: '#0284c7' },
   apigateway:   { label: 'API Gateway',           group: 'Edge',          shape: 'hex',     icon: '🚪', color: '#0891b2' },
   idp:          { label: 'Identity Provider',     group: 'Security',      shape: 'rect',    icon: '🛡️', color: '#9333ea' },
   secrets:      { label: 'Secrets / KMS',         group: 'Security',      shape: 'rect',    icon: '🔐', color: '#7e22ce' },
-
-  // Compute / backend
   api:          { label: 'API / Service',         group: 'Backend',       shape: 'rect',    icon: '⚙️', color: '#4338ca' },
   function:     { label: 'Function / Lambda',     group: 'Backend',       shape: 'round',   icon: 'λ',  color: '#5b21b6' },
   container:    { label: 'Container / Task',      group: 'Backend',       shape: 'rect',    icon: '🐳', color: '#4f46e5' },
   consumer:     { label: 'Consumer / Worker',     group: 'Backend',       shape: 'rect',    icon: '🔄', color: '#6d28d9' },
-
-  // Messaging
   queue:        { label: 'Queue (SQS-style)',     group: 'Messaging',     shape: 'queue',   icon: '📨', color: '#be185d' },
   topic:        { label: 'Pub/Sub Topic (SNS)',   group: 'Messaging',     shape: 'queue',   icon: '📣', color: '#db2777' },
-
-  // Temporal / orchestration plane (the new group)
-  scheduler:    { label: 'Scheduler / Cron',      group: 'Temporal',      shape: 'stadium', icon: '⏰', color: '#0d9488' },
-  eventbus:     { label: 'Event Bus (EventBridge)', group: 'Temporal',    shape: 'hex',     icon: '🚌', color: '#0f766e' },
-  workflow:     { label: 'Workflow (Step Fn / Temporal)', group: 'Temporal', shape: 'rect', icon: '🧭', color: '#047857' },
+  eventbus:     { label: 'Event Bus',             group: 'Temporal',      shape: 'hex',     icon: '🚌', color: '#0f766e' },
+  workflow:     { label: 'Workflow (Temporal)',   group: 'Temporal',      shape: 'rect',    icon: '🧭', color: '#047857' },
   statemachine: { label: 'State Machine',         group: 'Temporal',      shape: 'rect',    icon: '🔁', color: '#059669' },
   activity:     { label: 'Activity / Task',       group: 'Temporal',      shape: 'rect',    icon: '🛠️', color: '#10b981' },
   saga:         { label: 'Saga / Orchestrator',   group: 'Temporal',      shape: 'rect',    icon: '🪢', color: '#15803d' },
   timer:        { label: 'Timer / Delay',         group: 'Temporal',      shape: 'stadium', icon: '⏲️', color: '#65a30d' },
   signal:       { label: 'Signal / Webhook',      group: 'Temporal',      shape: 'stadium', icon: '📡', color: '#84cc16' },
-
-  // Data
-  database:     { label: 'Database',              group: 'Data',          shape: 'cyl',     icon: '🗄️', color: '#15803d' },
-  search:       { label: 'Search Index',          group: 'Data',          shape: 'cyl',     icon: '🔍', color: '#0f766e' },
-  cache:        { label: 'Cache',                 group: 'Data',          shape: 'cyl',     icon: '⚡', color: '#a16207' },
-  storage:      { label: 'Object Storage (S3)',   group: 'Data',          shape: 'cyl',     icon: '📦', color: '#7c3aed' },
-  warehouse:    { label: 'Warehouse / Lake',      group: 'Data',          shape: 'cyl',     icon: '📈', color: '#9333ea' },
-  stream:       { label: 'Stream (Kinesis/Kafka)', group: 'Data',         shape: 'queue',   icon: '🌊', color: '#0e7490' },
-
-  // Observability
+  database:     { label: 'Database (generic)',    group: 'Storage',       shape: 'cyl',     icon: '🗄️', color: '#15803d' },
+  cache:        { label: 'Cache (generic)',       group: 'Storage',       shape: 'cyl',     icon: '⚡', color: '#a16207' },
+  warehouse:    { label: 'Warehouse / Lake',      group: 'Storage',       shape: 'cyl',     icon: '📈', color: '#9333ea' },
+  stream:       { label: 'Stream (generic)',      group: 'Kafka',         shape: 'queue',   icon: '🌊', color: '#0e7490' },
   telemetry:    { label: 'Telemetry / Metrics',   group: 'Observability', shape: 'rect',    icon: '📊', color: '#475569' },
-
-  // External systems
-  external:     { label: 'External API',          group: 'External',      shape: 'rect',    icon: '🌐', color: '#475569' }
+  external:     { label: 'External system',       group: 'APIs',          shape: 'rect',    icon: '🌐', color: '#475569' }
 };
 
-const GROUP_ORDER = ['Clients', 'Edge', 'Security', 'Backend', 'Messaging', 'Temporal', 'Data', 'Observability', 'External', 'Custom'];
+const GROUP_ORDER = ['APIs', 'Kafka', 'Storage', 'Jobs', 'Users', 'Telcos', 'Front-end', 'Edge', 'Security', 'Backend', 'Messaging', 'Temporal', 'Observability', 'Custom'];
 
 // Relationship vocabulary, organised the way a senior AWS-style architect
 // reads a diagram: synchronous request/response, asynchronous events, the
@@ -748,10 +765,10 @@ export function runLints({ components, connections }) {
 //     findings:    [{ severity, category, message, recommendation, componentId }],
 //     score, grade, summary
 //   }
-const NON_TRIVIAL_GROUPS = new Set(['Backend', 'Data', 'External', 'Messaging', 'Temporal']);
+const NON_TRIVIAL_GROUPS = new Set(['Backend', 'Storage', 'APIs', 'Kafka', 'Messaging', 'Temporal', 'Jobs']);
 const DURABLE_TYPES = new Set(['workflow', 'statemachine', 'saga']);
 const SYNC_KINDS = new Set(['calls', 'queries', 'commands', 'invokes', 'sends', 'integrates', 'uses', 'reads', 'writes']);
-const EXTERNAL_TYPES = new Set(['external']);
+const EXTERNAL_TYPES = new Set(['external', 'external_api']);
 
 export function analyzeOrchestration({ components, connections, allTypes }) {
   const findings = [];
@@ -782,9 +799,9 @@ export function analyzeOrchestration({ components, connections, allTypes }) {
   // ---- Candidate detection: which components NEED a workflow? ----------
   components.forEach((c) => {
     if (DURABLE_TYPES.has(c.type)) return;            // already durable
-    if (groupOf(c.id) === 'Clients') return;          // user/SPA — not our problem
+    if (groupOf(c.id) === 'Users') return;            // users/customers — not our problem
     if (groupOf(c.id) === 'Edge') return;             // gateways/CDNs are stateless
-    if (groupOf(c.id) === 'Data') return;             // datastores aren't orchestrators
+    if (groupOf(c.id) === 'Storage') return;          // datastores aren't orchestrators
     const out = outgoing.get(c.id) || [];
 
     // 1. Multi-step synchronous orchestration ("god service" pattern).
@@ -1250,20 +1267,93 @@ export function useBuilder() {
   }, []);
 
   // ---------- Mutators (each commits history) ----------
-  const addComponent = useCallback((type) => {
+  const addComponent = useCallback((type, opts = {}) => {
     const def = allTypes[type];
-    if (!def) return;
+    if (!def) return null;
     commit();
-    setComponents((prev) => [
-      ...prev,
-      {
-        id: newId(),
-        type,
-        name: `${def.label} ${prev.filter((p) => p.type === type).length + 1}`,
-        notes: '', icon: '', color: ''
+    const id = newId();
+    const created = {
+      id,
+      type,
+      name: opts.name || `${def.label} ${(/* count of same type */ 0)}`,
+      notes: '', icon: '', color: '',
+      ...(opts.position ? { position: opts.position } : {})
+    };
+    setComponents((prev) => {
+      // Compute the proper sequential name now that we can see prev.
+      if (!opts.name) {
+        created.name = `${def.label} ${prev.filter((p) => p.type === type).length + 1}`;
       }
-    ]);
+      return [...prev, created];
+    });
+    return id;
   }, [allTypes, commit]);
+
+  // Move a component on the canvas. Skips history (would otherwise spam undo
+  // with one entry per pointer-move tick) — intended for live drag updates.
+  const setComponentPosition = useCallback((id, position) => {
+    setComponents((prev) => prev.map((c) => (c.id === id ? { ...c, position } : c)));
+  }, []);
+
+  // One-shot Mermaid-style auto-layout. Uses dagre (the same layered
+  // graph layout engine Mermaid's flowchart renderer is built on), so the
+  // result matches what users saw on the old Mermaid auto-layout tab.
+  // Respects the current `layoutDir` ('LR' or 'TB') and overwrites any
+  // manually-dragged positions — that is the documented contract: clicking
+  // auto-arrange resets the layout back to the canonical Mermaid one.
+  const autoLayout = useCallback(() => {
+    commit('auto-layout');
+    setComponents((prev) => {
+      if (!prev.length) return prev;
+      // Reserve generous space per node so dagre's edge routing keeps the
+      // step+label badges (~80\u00d722px) from colliding with neighbors.
+      const NODE_W = 240, NODE_H = 110;
+      const g = new dagre.graphlib.Graph({ compound: true });
+      g.setGraph({
+        rankdir: layoutDir === 'TB' ? 'TB' : 'LR',
+        // Generous spacing so edge labels (step number + relationship)
+        // never collide with adjacent nodes.
+        nodesep: layoutDir === 'TB' ? 60 : 90,
+        ranksep: layoutDir === 'TB' ? 110 : 140,
+        edgesep: 30,
+        marginx: 40,
+        marginy: 40,
+        ranker: 'tight-tree'
+      });
+      g.setDefaultEdgeLabel(() => ({}));
+      prev.forEach((c) => g.setNode(c.id, { width: NODE_W, height: NODE_H }));
+
+      // "Group by domain" → use dagre's compound graph so nodes that
+      // share a group cluster together visually as well.
+      if (useSubgraphs) {
+        const groupOf = (c) => (allTypes[c.type]?.group) || 'Other';
+        const groups = new Set(prev.map(groupOf));
+        groups.forEach((grp) => {
+          g.setNode(`__cluster_${grp}`, { label: grp });
+        });
+        prev.forEach((c) => g.setParent(c.id, `__cluster_${groupOf(c)}`));
+      }
+
+      connections.forEach((e) => {
+        if (e.fromId !== e.toId && g.hasNode(e.fromId) && g.hasNode(e.toId)) {
+          g.setEdge(e.fromId, e.toId);
+        }
+      });
+      dagre.layout(g);
+      return prev.map((c) => {
+        const n = g.node(c.id);
+        if (!n) return c;
+        // dagre returns the node center; React Flow positions are top-left.
+        return { ...c, position: { x: n.x - NODE_W / 2, y: n.y - NODE_H / 2 } };
+      });
+    });
+  }, [connections, layoutDir, useSubgraphs, allTypes, commit]);
+
+  // Drop all stored positions so the next render falls back to grid auto-place.
+  const clearComponentPositions = useCallback(() => {
+    commit('clear-positions');
+    setComponents((prev) => prev.map(({ position, ...rest }) => rest));
+  }, [commit]);
 
   const updateComponent = useCallback((id, patch) => {
     commit(`update-comp-${id}-${Object.keys(patch).join('-')}`);
@@ -1532,19 +1622,25 @@ export function useBuilder() {
     [components, mergedEdges, allTypes, layoutDir, useSubgraphs]
   );
 
-  const simulationSteps = useMemo(() => mergedEdges.map((e, idx) => {
-    const from = components.find((c) => c.id === e.fromId);
-    const to = components.find((c) => c.id === e.toId);
+  // One simulation step per raw connection — so even when several
+  // connections share a node-pair (and visually stack as multiple labels
+  // on a single edge), each label still gets its own step number that
+  // the user can renumber from the diagram.
+  const simulationSteps = useMemo(() => connections.map((conn, idx) => {
+    const from = components.find((c) => c.id === conn.fromId);
+    const to = components.find((c) => c.id === conn.toId);
+    const rel = getRelationship(conn.kind);
+    const label = conn.label || rel?.label || conn.kind || 'connects to';
     return {
       index: idx,
-      fromId: e.fromId, toId: e.toId,
+      connId: conn.id,
+      fromId: conn.fromId, toId: conn.toId,
       fromName: from?.name || '?', toName: to?.name || '?',
-      labels: e.labels,
-      narrative: from && to
-        ? `${from.name} ${e.labels.join(' & ') || 'connects to'} ${to.name}`
-        : ''
+      kind: conn.kind,
+      labels: [label],
+      narrative: from && to ? `${from.name} ${label} ${to.name}` : ''
     };
-  }), [mergedEdges, components]);
+  }), [connections, components]);
 
   const diff = useMemo(
     () => computeDiff(baseline, { title, components, connections }),
@@ -1698,6 +1794,7 @@ export function useBuilder() {
     // state
     title, setTitle: setTitleTracked,
     components, addComponent, updateComponent, removeComponent,
+    setComponentPosition, autoLayout, clearComponentPositions,
     removeComponents, applyToComponents, moveComponent, reorderComponents,
     connections, addConnection, updateConnection, removeConnection,
     duplicateConnection, swapConnection, moveConnection, reorderConnections,

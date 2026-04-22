@@ -57,7 +57,7 @@ export default function App() {
     : null;
 
   const highlight = mode === 'simulate' && safeStep
-    ? { fromId: safeStep.fromId, toId: safeStep.toId, edgeIndex: safeStep.index }
+    ? { fromId: safeStep.fromId, toId: safeStep.toId, edgeIndex: safeStep.index, connId: safeStep.connId }
     : null;
 
   const filenameBase = (b.title || 'architecture')
@@ -490,8 +490,23 @@ export default function App() {
             hasBaseline={!!b.baseline}
             forceTab={mode === 'diff' && b.baseline ? 'diff' : null}
             components={b.components}
+            connections={b.connections}
+            allTypes={b.allTypes}
             highlightStep={highlight}
             filenameBase={filenameBase}
+            onAddComponent={b.addComponent}
+            onUpdateComponent={b.updateComponent}
+            onSetComponentPosition={b.setComponentPosition}
+            onAddConnection={b.addConnection}
+            onUpdateConnection={b.updateConnection}
+            onReorderConnection={b.reorderConnections}
+            onRemoveComponent={b.removeComponent}
+            onRemoveConnection={b.removeConnection}
+            onSelectComponent={(id) => setSelection(new Set([id]))}
+            onSelectConnection={() => { /* future: jump to connection in panel */ }}
+            selectedComponentIds={selection}
+            onAutoLayout={() => { b.autoLayout(); showToast('Auto-arranged'); }}
+            onResetPositions={() => { b.clearComponentPositions(); showToast('Layout reset'); }}
           />
         </div>
       </main>

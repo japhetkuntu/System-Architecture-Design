@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { DEFAULT_TYPES } from '../hooks/useBuilder.js';
+import ComponentIcon from '../utils/componentIcons.jsx';
 
 const SHAPES = [
   { v: 'rect', l: 'Rectangle' },
@@ -79,11 +80,18 @@ export default function ComponentPalette({ allTypes, customTypes, onAdd, onAddCu
               key={key}
               type="button"
               className="palette-btn"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = 'copy';
+                e.dataTransfer.setData('application/x-archivise-type', key);
+              }}
               style={{ borderTopColor: def.color }}
               onClick={() => onAdd(key)}
-              title={`Add ${def.label}`}
+              title={`Click to add, or drag onto the canvas — ${def.label}`}
             >
-              <span className="palette-icon">{def.icon}</span>
+              <span className="palette-icon" style={{ color: def.color }}>
+                <ComponentIcon type={key} color={def.color} size={26} />
+              </span>
               <span className="palette-label">{def.label}</span>
             </button>
           );
@@ -101,10 +109,17 @@ export default function ComponentPalette({ allTypes, customTypes, onAdd, onAddCu
                   <button
                     type="button"
                     className="palette-inner"
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'copy';
+                      e.dataTransfer.setData('application/x-archivise-type', key);
+                    }}
                     onClick={() => onAdd(key)}
-                    title={`Add ${def.label}`}
+                    title={`Click to add, or drag onto the canvas — ${def.label}`}
                   >
-                    <span className="palette-icon">{def.icon}</span>
+                    <span className="palette-icon" style={{ color: def.color }}>
+                      <ComponentIcon type={key} color={def.color} size={26} />
+                    </span>
                     <span className="palette-label">{def.label}</span>
                   </button>
                   <button

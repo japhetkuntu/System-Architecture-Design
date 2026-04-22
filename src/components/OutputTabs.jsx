@@ -1,26 +1,39 @@
 import React, { useEffect, useState } from 'react';
 import DiagramView from './DiagramView.jsx';
 import MermaidCode from './MermaidCode.jsx';
+import CanvasView from './CanvasView.jsx';
 
+/**
+ * The interactive canvas IS the diagram. We no longer keep a separate
+ * "auto-layout" Mermaid tab — the user clicks "✨ Auto-arrange" inside the
+ * canvas instead. Mermaid is preserved as exportable code, and the Diff
+ * tab is shown only when there's a baseline to compare against.
+ */
 export default function OutputTabs({
   title, mermaid, diffMermaid, hasBaseline, forceTab,
-  components, highlightStep, filenameBase
+  components, connections, allTypes, highlightStep, filenameBase,
+  // canvas wiring
+  onAddComponent, onUpdateComponent, onSetComponentPosition, onAddConnection, onUpdateConnection,
+  onReorderConnection,
+  onRemoveComponent, onRemoveConnection,
+  onSelectComponent, onSelectConnection,
+  selectedComponentIds,
+  onAutoLayout, onResetPositions
 }) {
-  const [active, setActive] = useState('diagram');
+  const [active, setActive] = useState('canvas');
 
   useEffect(() => {
     if (forceTab) setActive(forceTab);
   }, [forceTab]);
 
   const tabs = [
-    { id: 'diagram', label: 'Diagram' },
-    ...(hasBaseline ? [{ id: 'diff', label: 'Diff diagram' }] : []),
-    { id: 'code', label: 'Mermaid Code' }
+    { id: 'canvas', label: '🎨 Diagram' },
+    ...(hasBaseline ? [{ id: 'diff', label: '🔍 Diff' }] : []),
+    { id: 'code', label: '📄 Mermaid code' }
   ];
 
-  // Don't show diff tab as active if it doesn't exist anymore
   useEffect(() => {
-    if (!hasBaseline && active === 'diff') setActive('diagram');
+    if (!hasBaseline && active === 'diff') setActive('canvas');
   }, [hasBaseline, active]);
 
   return (
@@ -40,13 +53,25 @@ export default function OutputTabs({
         ))}
       </div>
       <div className="tab-panel">
-        {active === 'diagram' && (
-          <DiagramView
-            code={mermaid}
-            title={title}
+        {active === 'canvas' && (
+          <CanvasView
             components={components}
+            connections={connections}
+            allTypes={allTypes}
             highlightStep={highlightStep}
-            filenameBase={filenameBase}
+            onAddComponent={onAddComponent}
+            onUpdateComponent={onUpdateComponent}
+            onSetComponentPosition={onSetComponentPosition}
+            onAddConnection={onAddConnection}
+            onUpdateConnection={onUpdateConnection}
+            onReorderConnection={onReorderConnection}
+            onRemoveComponent={onRemoveComponent}
+            onRemoveConnection={onRemoveConnection}
+            onSelectComponent={onSelectComponent}
+            onSelectConnection={onSelectConnection}
+            selectedComponentIds={selectedComponentIds}
+            onAutoLayout={onAutoLayout}
+            onResetPositions={onResetPositions}
           />
         )}
         {active === 'diff' && hasBaseline && (

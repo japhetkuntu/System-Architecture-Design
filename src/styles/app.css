@@ -593,7 +593,15 @@ textarea:focus, select:focus, input:focus {
   transform: translateY(-2px);
   box-shadow: var(--shadow-sm);
 }
-.palette-icon { font-size: 22px; }
+.palette-icon {
+  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+}
+.palette-icon svg { width: 100%; height: 100%; }
 .palette-label { font-weight: 500; line-height: 1.2; }
 
 .component-list { border-top: 1px dashed var(--border); padding-top: 16px; }
@@ -2379,4 +2387,299 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   background: var(--panel);
   box-shadow: var(--shadow-md);
   min-width: 180px;
+}
+
+/* =======================================================================
+   React Flow interactive canvas
+   ======================================================================= */
+.canvas-wrap {
+  position: relative;
+  width: 100%;
+  flex: 1 1 auto;
+  align-self: stretch;
+  height: 100%;
+  min-height: 520px;
+  background: var(--panel);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+/* React Flow's root needs an explicit pixel height for its percentage
+   sizing to resolve. min-height on the wrapper isn't enough, and React
+   Flow sets `position:relative; height:100%` inline — so we force absolute
+   fill with !important to override the inline style. */
+.canvas-wrap .react-flow {
+  position: absolute !important;
+  inset: 0 !important;
+  width: auto !important;
+  height: auto !important;
+}
+.canvas-wrap .react-flow__renderer { background: var(--panel); }
+.canvas-wrap .react-flow__edge-path { transition: stroke 0.15s ease; }
+.canvas-wrap .react-flow__edge.selected .react-flow__edge-path,
+.canvas-wrap .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--brand) !important;
+  stroke-width: 2.5 !important;
+}
+.canvas-wrap .react-flow__controls {
+  box-shadow: var(--shadow-md);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.canvas-wrap .react-flow__controls-button {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.canvas-wrap .react-flow__controls-button:hover { background: var(--code-bg); }
+
+/* Component node */
+.rf-node {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 3px solid #475569;
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  /* Let height grow with wrapped name + notes; width is set inline. */
+  min-height: 64px;
+  height: auto;
+}
+.rf-node:hover { box-shadow: var(--shadow-md); }
+.rf-node.is-selected {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.rf-node-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rf-node-icon { font-size: 20px; line-height: 1; }
+.rf-node-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.rf-node-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  /* Wrap long names instead of clipping with ellipsis. */
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+  line-height: 1.25;
+}
+.rf-node-text small {
+  font-size: 10.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rf-node-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  cursor: text;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.3;
+}
+.rf-node-note:hover { color: var(--text); text-decoration: underline dotted; }
+.rf-node-note.placeholder { opacity: 0.55; }
+.rf-node-note-input {
+  font: inherit;
+  font-size: 11px;
+  font-style: italic;
+  width: 100%;
+  margin-top: 4px;
+  padding: 2px 4px;
+  border: 1px solid var(--brand);
+  border-radius: 4px;
+  background: white;
+  color: var(--text);
+  outline: none;
+  resize: vertical;
+  min-height: 32px;
+}
+.rf-handle {
+  width: 10px;
+  height: 10px;
+  background: var(--brand);
+  border: 2px solid var(--panel);
+}
+.rf-handle:hover { transform: scale(1.4); }
+
+/* Empty state overlay */
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.canvas-empty-card {
+  background: var(--panel);
+  border: 2px dashed var(--border);
+  border-radius: var(--r-md);
+  padding: 24px 28px;
+  text-align: center;
+  max-width: 380px;
+  box-shadow: var(--shadow-sm);
+}
+.canvas-empty-card h3 { margin: 0 0 8px; font-size: 16px; }
+.canvas-empty-card p { margin: 0; font-size: 13px; color: var(--muted); }
+
+/* Canvas toolbar (floats above the React Flow surface) */
+.canvas-toolbar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 4px 10px 4px 4px;
+  box-shadow: var(--shadow-sm);
+  max-width: calc(100% - 80px);
+}
+.canvas-toolbar .primary-btn,
+.canvas-toolbar .secondary-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: var(--r-pill);
+}
+.canvas-toolbar-hint {
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60ch;
+}
+@media (max-width: 900px) {
+  .canvas-toolbar-hint { display: none; }
+}
+
+/* Node glyph slot — replaces the old emoji span on canvas nodes. */
+.rf-node-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+}
+.rf-node-glyph svg { width: 100%; height: 100%; }
+
+/* Selected edge — clearer affordance, hints that Backspace will delete it */
+.canvas-wrap .react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: 3 !important;
+  filter: drop-shadow(0 0 3px rgba(67,56,202,0.35));
+}
+.canvas-wrap .react-flow__edge:hover { cursor: pointer; }
+.canvas-wrap .react-flow__edgeupdater { r: 8; fill: var(--brand); fill-opacity: 0.6; }
+
+/* Inline node rename input — sized to match the strong label */
+.rf-node-input {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  width: 100%;
+  border: 1px solid var(--brand);
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: white;
+  color: var(--text);
+  outline: none;
+}
+.rf-node strong { cursor: text; }
+.rf-node strong:hover { text-decoration: underline dotted; }
+
+/* ---- Multi-label edge badges + simulation highlights ---- */
+.rf-edge-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  z-index: 5;
+}
+.rf-edge-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 2px;
+  background: #ffffff;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+.rf-edge-badge:hover { box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18); }
+.rf-edge-badge .rf-edge-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: currentColor;
+  color: #ffffff !important;
+  font-size: 10px;
+  font-weight: 700;
+}
+.rf-edge-badge .rf-edge-label {
+  color: var(--text, #0f172a);
+  font-weight: 600;
+}
+.rf-edge-badge.active {
+  background: #fef3c7;
+  border-color: #d97706;
+  color: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.25), 0 4px 10px rgba(217, 119, 6, 0.25);
+  animation: rfBadgePulse 1.2s ease-in-out infinite;
+}
+.rf-edge-badge.active .rf-edge-step { background: #d97706; }
+.rf-edge-badge.active .rf-edge-label { color: #92400e; }
+
+@keyframes rfBadgePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.rf-edge-dimmed { opacity: 0.4; }
+
+/* Active source/target nodes during simulation */
+.rf-node.is-active-source {
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.45), 0 0 24px rgba(217, 119, 6, 0.35);
+  animation: rfNodePulse 1.2s ease-in-out infinite;
+}
+.rf-node.is-active-target {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.45), 0 0 24px rgba(16, 185, 129, 0.35);
+  animation: rfNodePulse 1.2s ease-in-out infinite;
+}
+@keyframes rfNodePulse {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+/* Beefier arrowhead visibility */
+.react-flow__edge.animated path.react-flow__edge-path {
+  stroke-dasharray: 6 4;
+  animation: rfDash 0.6s linear infinite;
+}
+@keyframes rfDash {
+  to { stroke-dashoffset: -20; }
 }
