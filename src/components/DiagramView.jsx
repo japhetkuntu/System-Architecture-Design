@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 
 let initialized = false;
@@ -26,6 +26,76 @@ export default function DiagramView({
   const [renderError, setRenderError] = useState('');
   const [renderId] = useState(() => `mmd-${Math.random().toString(36).slice(2, 10)}`);
   const [downloading, setDownloading] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [dragging, setDragging] = useState(false);
+  const scrollRef = useRef(null);
+  const dragAnchor = useRef({ startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
+
+  const clampZoom = useCallback((value) => Math.max(0.35, Math.min(2.5, value)), []);
+  const adjustZoom = useCallback((factor) => setZoom((z) => clampZoom(z * factor)), [clampZoom]);
+
+  const fitDiagram = useCallback(() => {
+    const svg = svgWrapRef.current?.querySelector('svg');
+    const scroll = scrollRef.current;
+    if (!svg || !scroll) return;
+    const vb = svg.viewBox?.baseVal;
+    const width = (vb?.width || svg.getBBox().width) || 1200;
+    const height = (vb?.height || svg.getBBox().height) || 800;
+    const padding = 80;
+    const availableWidth = Math.max(1, scroll.clientWidth - padding);
+    const availableHeight = Math.max(1, scroll.clientHeight - padding);
+    setZoom(clampZoom(Math.min(availableWidth / width, availableHeight / height, 1)));
+  }, [clampZoom]);
+
+  useEffect(() => {
+    setZoom(1);
+    const id = window.setTimeout(fitDiagram, 50);
+    return () => window.clearTimeout(id);
+  }, [code, fitDiagram]);
+
+  const onWheel = useCallback((event) => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    const factor = event.deltaY > 0 ? 0.9 : 1.1;
+    adjustZoom(factor);
+  }, [adjustZoom]);
+
+  const handlePointerDown = useCallback((event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest('button,input,select,textarea')) return;
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    setDragging(true);
+    dragAnchor.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: scroll.scrollLeft,
+      scrollTop: scroll.scrollTop
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, []);
+
+  const handlePointerMove = useCallback((event) => {
+    if (!dragging) return;
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    const dx = event.clientX - dragAnchor.current.startX;
+    const dy = event.clientY - dragAnchor.current.startY;
+    scroll.scrollLeft = dragAnchor.current.scrollLeft - dx;
+    scroll.scrollTop = dragAnchor.current.scrollTop - dy;
+  }, [dragging]);
+
+  const handlePointerUp = useCallback((event) => {
+    setDragging(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    scroll.addEventListener('wheel', onWheel, { passive: false });
+    return () => scroll.removeEventListener('wheel', onWheel);
+  }, [onWheel]);
 
   useEffect(() => {
     if (!initialized) {
@@ -294,6 +364,12 @@ export default function DiagramView({
       <div className="diagram-header">
         {title && <h2 className="diagram-title">{title}</h2>}
         <div className="diagram-actions">
+          <div className="diagram-zoom-controls">
+            <button type="button" className="secondary-btn" onClick={() => adjustZoom(0.9)} disabled={zoom <= 0.35} title="Zoom out">−</button>
+            <button type="button" className="secondary-btn" onClick={fitDiagram} title="Fit diagram to view">Fit</button>
+            <button type="button" className="secondary-btn" onClick={() => adjustZoom(1.1)} disabled={zoom >= 2.5} title="Zoom in">+</button>
+            <span className="diagram-zoom-label">{Math.round(zoom * 100)}%</span>
+          </div>
           <DownloadMenu
             disabled={!!renderError || downloading}
             label={downloading ? 'Rendering…' : '⬇ Download'}
@@ -319,8 +395,16 @@ export default function DiagramView({
         </div>
       )}
 
-      <div className="diagram-scroll">
-        <div ref={svgWrapRef} className="diagram-svg" />
+      <div
+        className={`diagram-scroll${dragging ? ' is-dragging' : ''}`}
+        ref={scrollRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+      >
+        <div ref={svgWrapRef} className="diagram-svg" style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }} />
       </div>
     </div>
   );

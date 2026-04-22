@@ -399,12 +399,34 @@ textarea:focus, select:focus, input:focus {
   border-radius: 8px;
   padding: 32px;
   background: #fff;
+  touch-action: none;
+  cursor: grab;
   /* Grow to fill whatever space the sticky panel gives it */
   flex: 1 1 auto;
   min-height: 480px;
 }
+.diagram-scroll.is-dragging { cursor: grabbing; }
 
-.diagram-svg { display: block; min-width: 100%; }
+.diagram-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+}
+
+.diagram-zoom-label {
+  color: var(--muted);
+  font-size: 13px;
+  min-width: 42px;
+  text-align: right;
+}
+
+.diagram-svg {
+  display: inline-block;
+  min-width: 100%;
+  min-height: 100%;
+  transform-origin: top left;
+}
 .diagram-svg svg {
   max-width: none;
   height: auto;
