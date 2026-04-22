@@ -10,6 +10,7 @@ import SimulationPanel from './components/SimulationPanel.jsx';
 import DiffPanel from './components/DiffPanel.jsx';
 import AdrDialog from './components/AdrDialog.jsx';
 import ConfirmDialog from './components/ConfirmDialog.jsx';
+import PromptDialog from './components/PromptDialog.jsx';
 import WelcomeCard from './components/WelcomeCard.jsx';
 import LintsPanel from './components/LintsPanel.jsx';
 import AssessmentPanel from './components/AssessmentPanel.jsx';
@@ -18,6 +19,7 @@ import ShareDialog from './components/ShareDialog.jsx';
 import CloudGallery from './components/CloudGallery.jsx';
 import ProjectPicker from './components/ProjectPicker.jsx';
 import LayoutControls from './components/LayoutControls.jsx';
+import { buildAllSequenceDiagrams } from './utils/uml.js';
 
 const DISMISS_KEY = 'archivise:welcome-dismissed:v1';
 
@@ -35,6 +37,8 @@ export default function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [selection, setSelection] = useState(() => new Set());
   const [confirm, setConfirm] = useState(null);
+  const [prompt, setPrompt] = useState(null);
+  const [focusMode, setFocusMode] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
     try { return localStorage.getItem(DISMISS_KEY) === '1'; } catch { return false; }
   });
@@ -51,6 +55,31 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(''), 2400);
   }, []);
+
+  const askPrompt = useCallback((cfg) => {
+    setPrompt({
+      title: cfg.title || 'Enter value',
+      message: cfg.message || '',
+      defaultValue: cfg.defaultValue || '',
+      placeholder: cfg.placeholder || '',
+      submitLabel: cfg.submitLabel || 'Save',
+      cancelLabel: cfg.cancelLabel || 'Cancel',
+      textarea: cfg.textarea || false,
+      onConfirm: (value) => {
+        if (cfg.onConfirm) cfg.onConfirm(value);
+        setPrompt(null);
+      },
+      onCancel: () => {
+        if (cfg.onCancel) cfg.onCancel();
+        setPrompt(null);
+      }
+    });
+  }, []);
+
+  const confirmAction = useCallback(() => {
+    confirm?.onConfirm?.();
+    setConfirm(null);
+  }, [confirm]);
 
   const safeStep = currentStep >= 0 && currentStep < b.simulationSteps.length
     ? b.simulationSteps[currentStep]
@@ -229,10 +258,19 @@ export default function App() {
   };
 
   const saveCurrentAsDoc = () => {
-    const name = window.prompt('Name this architecture:', b.title || 'Untitled');
-    if (!name) return;
-    b.saveAsDoc(name.trim());
-    showToast(`Saved "${name.trim()}"`);
+    askPrompt({
+      title: 'Name this architecture',
+      message: 'Give this architecture a friendly name before saving it locally.',
+      defaultValue: b.title || 'Untitled',
+      placeholder: 'Architecture name',
+      submitLabel: 'Save',
+      onConfirm: (value) => {
+        const name = value?.trim();
+        if (!name) return;
+        b.saveAsDoc(name);
+        showToast(`Saved "${name}"`);
+      }
+    });
   };
 
   const newDocAction = () => {
@@ -262,10 +300,12 @@ export default function App() {
       else if (adrOpen) setAdrOpen(false);
       else if (workspaceOpen) setWorkspaceOpen(false);
       else if (confirm) setConfirm(null);
+      else if (focusMode) setFocusMode(false);
       else if (selection.size) clearSelection();
-    }
+    },
+    'f': () => setFocusMode((v) => !v)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [b.canUndo, b.canRedo, b.activeDocId, b.simulationSteps.length, shareOpen, adrOpen, workspaceOpen, confirm, selection.size]);
+  }), [b.canUndo, b.canRedo, b.activeDocId, b.simulationSteps.length, shareOpen, adrOpen, workspaceOpen, confirm, focusMode, selection.size]);
   useKeyboardShortcuts(shortcuts);
 
   const diffCount = b.diff
@@ -276,8 +316,21 @@ export default function App() {
 
   const getArchitecture = useCallback(() => JSON.parse(b.exportJson()), [b]);
 
+  // Auto-enter focus/fullscreen when entering Simulate; restore previous mode on exit.
+  const prevFocusRef = useRef(null);
+  useEffect(() => {
+    if (mode === 'simulate') {
+      if (prevFocusRef.current === null) prevFocusRef.current = focusMode;
+      setFocusMode(true);
+    } else if (prevFocusRef.current !== null) {
+      setFocusMode(prevFocusRef.current);
+      prevFocusRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
   return (
-    <div className="app">
+    <div className={`app${focusMode ? ' app--focus' : ''}`}>
       <header className="app-header">
         <div className="app-title">
           <h1>Archivise</h1>
@@ -494,6 +547,8 @@ export default function App() {
             allTypes={b.allTypes}
             highlightStep={highlight}
             filenameBase={filenameBase}
+            layoutDir={b.layoutDir}
+            useSubgraphs={b.useSubgraphs}
             onAddComponent={b.addComponent}
             onUpdateComponent={b.updateComponent}
             onSetComponentPosition={b.setComponentPosition}
@@ -507,6 +562,8 @@ export default function App() {
             selectedComponentIds={selection}
             onAutoLayout={() => { b.autoLayout(); showToast('Auto-arranged'); }}
             onResetPositions={() => { b.clearComponentPositions(); showToast('Layout reset'); }}
+            focusMode={focusMode}
+            onToggleFocusMode={() => setFocusMode((v) => !v)}
           />
         </div>
       </main>
@@ -528,6 +585,11 @@ export default function App() {
         mermaid={b.mermaid}
         baselineMermaid={b.baselineMermaid}
         diffMermaid={b.diffMermaid}
+        sequences={buildAllSequenceDiagrams({
+          components: b.components,
+          connections: b.connections,
+          allTypes: b.allTypes
+        })}
         filenameBase={filenameBase}
       />
 
@@ -552,8 +614,7 @@ export default function App() {
         moveCloudArchitectureToProject={b.moveCloudArchitectureToProject}
         listCloudProjects={b.listCloudProjects}
         onOpenProjects={() => { setCloudOpen(false); setProjectsOpen(true); }}
-        onLoaded={(id) => { setCloudOpen(false); clearSelection(); dismissWelcome(); showToast('Loaded from cloud'); }}
-      />
+        onLoaded={(id) => { setCloudOpen(false); clearSelection(); dismissWelcome(); showToast('Loaded from cloud'); }}        onConfirm={(cfg) => setConfirm(cfg)}      />
 
       <ProjectPicker
         open={projectsOpen}
@@ -565,6 +626,7 @@ export default function App() {
         createCloudProject={b.createCloudProject}
         renameCloudProject={b.renameCloudProject}
         deleteCloudProject={b.deleteCloudProject}
+        onConfirm={(cfg) => setConfirm(cfg)}
       />
 
       <WorkspaceSidebar
@@ -599,6 +661,7 @@ export default function App() {
         onNewBlank={() => { newDocAction(); setWorkspaceOpen(false); }}
         onSaveCurrentLocal={() => { saveCurrentAsDoc(); }}
         onConfirm={(cfg) => setConfirm(cfg)}
+        onPrompt={(cfg) => askPrompt(cfg)}
         onToast={showToast}
       />
 
@@ -608,8 +671,20 @@ export default function App() {
         message={confirm?.message}
         confirmLabel={confirm?.confirmLabel}
         destructive={confirm?.destructive}
-        onConfirm={confirm?.onConfirm}
+        onConfirm={confirmAction}
         onCancel={() => setConfirm(null)}
+      />
+      <PromptDialog
+        open={!!prompt}
+        title={prompt?.title}
+        message={prompt?.message}
+        defaultValue={prompt?.defaultValue}
+        placeholder={prompt?.placeholder}
+        submitLabel={prompt?.submitLabel}
+        cancelLabel={prompt?.cancelLabel}
+        textarea={prompt?.textarea}
+        onConfirm={prompt?.onConfirm}
+        onCancel={prompt?.onCancel}
       />
 
       <div className="toast-region" role="status" aria-live="polite" aria-atomic="true">

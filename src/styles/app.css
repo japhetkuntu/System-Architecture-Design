@@ -1438,6 +1438,21 @@ kbd {
   overflow-y: auto;
   flex: 1;
 }
+.prompt-dialog-input,
+.prompt-dialog-input:focus,
+.prompt-dialog-input:hover {
+  width: 100%;
+  min-height: 38px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+.prompt-dialog-input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.12); }
 .modal-foot {
   padding: 12px 20px;
   border-top: 1px solid var(--border);
@@ -1473,6 +1488,99 @@ kbd {
   font-family: inherit;
   background: var(--panel);
   color: var(--text);
+}
+
+/* --- ADR section + diagram toggles -------------------------------------- */
+.adr-toggles {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  gap: 8px;
+}
+.adr-toggles-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.adr-toggles-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.adr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.adr-chip:hover { border-color: var(--accent); }
+.adr-chip input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.adr-chip:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+
+/* --- ADR custom sections ------------------------------------------------- */
+.adr-custom-sections {
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  gap: 10px;
+}
+.adr-custom-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.adr-custom-section {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.adr-custom-section-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.adr-custom-section-head input {
+  flex: 1 1 auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--panel);
+  color: var(--text);
+}
+.adr-custom-section textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
 }
 .adr-preview-wrap {
   border: 1px solid var(--border);
@@ -2683,3 +2791,150 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 @keyframes rfDash {
   to { stroke-dashoffset: -20; }
 }
+
+/* =========================================================================
+   Focus / Fullscreen mode — gives the diagram (and simulation) the entire
+   viewport. Triggered explicitly via the ⛶ button or implicitly when the
+   user enters Simulate. Press Esc or F to exit.
+   ========================================================================= */
+.app--focus {
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.app--focus .app-header,
+.app--focus .app-footer,
+.app--focus .api-key-row,
+.app--focus .hint-card {
+  display: none !important;
+}
+.app--focus .layout {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 0;
+  height: 100%;
+  min-height: 0;
+}
+/* In focus mode, hide the entire build-side panel; show only sim panel. */
+.app--focus .input-panel {
+  border-right: 1px solid var(--border);
+  padding: 14px;
+  border-radius: 0;
+  overflow-y: auto;
+  height: 100vh;
+  background: var(--panel-soft);
+}
+.app--focus .output-panel {
+  position: static;
+  top: auto;
+  border-radius: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.app--focus .output-tabs {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.app--focus .tab-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app--focus .tab-panel > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Hide the input-panel entirely in focus mode when NOT simulating. */
+.app--focus.app--focus-only .input-panel { display: none; }
+.app--focus.app--focus-only .layout { grid-template-columns: 1fr; }
+
+@media (max-width: 900px) {
+  .app--focus .layout { grid-template-columns: 1fr; }
+  .app--focus .input-panel { max-height: 40vh; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .app--focus .output-panel { height: auto; flex: 1 1 auto; }
+}
+
+/* Tab-bar icon button (for the fullscreen toggle) */
+.tab.tab--icon {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+/* =========================================================================
+   Sequences view — list of auto-detected flows rendered as Mermaid
+   sequence diagrams.
+   ========================================================================= */
+.sequences-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+.sequences-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.sequences-label {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.sequences-select {
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev);
+  font: inherit;
+  min-width: 220px;
+}
+.sequences-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+
+/* =========================================================================
+   Diagram download dropdown menu
+   ========================================================================= */
+.download-menu { position: relative; display: inline-block; }
+.download-menu-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  min-width: 220px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.download-menu-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.download-menu-item:hover { background: var(--accent-soft); color: var(--accent-hover); }

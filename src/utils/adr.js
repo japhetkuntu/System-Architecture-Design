@@ -7,10 +7,32 @@ const FIELD_LABELS = {
   fromId: 'From', toId: 'To', kind: 'Relationship', label: 'Label'
 };
 
+const TYPE_ICON_FALLBACK = {
+  service: '⚙️',
+  client: '💻',
+  external: '🌐',
+  database: '🗄️',
+  queue: '📨',
+  topic: '📣',
+  workflow: '🧭',
+  function: 'λ',
+  api: '⚙️',
+  cache: '⚡',
+  eventbus: '🚌',
+  scheduler: '⏰',
+  secrets: '🔐',
+  telemetry: '📊',
+  loadbalancer: '⚖️',
+  apigateway: '🚪',
+  idp: '🛡️',
+  customer: '🧑',
+  mobile: '📱'
+};
+
 function compName(c, allTypes) {
   if (!c) return '(unknown)';
   const def = allTypes[c.type];
-  const icon = c.icon || def?.icon || '';
+  const icon = c.icon || def?.icon || TYPE_ICON_FALLBACK[c.type] || '';
   const name = c.name || def?.label || c.id;
   return `${icon ? icon + ' ' : ''}${name}`.trim();
 }
@@ -131,8 +153,19 @@ export function generateAdrMarkdown({
   diffMermaid,
   alternatives = '',
   relatedAdrs = '',
-  reviewers = ''
+  reviewers = '',
+  // NEW (all optional, backward-compatible):
+  // - sections: per-section toggles. Anything missing defaults to true.
+  // - diagrams: explicit list of {label, code} to embed in the Diagrams
+  //   section. When provided, overrides the default baseline/current/diff
+  //   trio so callers can include sequence diagrams etc.
+  // - customSections: array of { heading, body } appended after the
+  //   built-in sections, before the footer.
+  sections = {},
+  diagrams = null,
+  customSections = []
 }) {
+  const want = (key, fallback = true) => (sections[key] === undefined ? fallback : !!sections[key]);
   const today = new Date().toISOString().slice(0, 10);
   const adrTitle = title || current?.title || 'Architecture change';
   const numStr = number ? `ADR-${String(number).padStart(4, '0')}` : 'ADR';
@@ -149,20 +182,23 @@ export function generateAdrMarkdown({
   out.push('');
 
   // Context
-  out.push('## Context');
-  out.push('');
-  if (baseline) {
-    out.push(`The existing architecture, **${baseline.title}**, currently consists of ${summarizeArchitecture(baseline, allTypes)}.`);
+  if (want('context')) {
+    out.push('## Context');
     out.push('');
-    out.push(`We are proposing changes that result in **${current.title}**, which will consist of ${summarizeArchitecture(current, allTypes)}.`);
-  } else {
-    out.push(`This document captures the initial design of **${current.title}**, consisting of ${summarizeArchitecture(current, allTypes)}.`);
+    if (baseline) {
+      out.push(`The existing architecture, **${baseline.title}**, currently consists of ${summarizeArchitecture(baseline, allTypes)}.`);
+      out.push('');
+      out.push(`We are proposing changes that result in **${current.title}**, which will consist of ${summarizeArchitecture(current, allTypes)}.`);
+    } else {
+      out.push(`This document captures the initial design of **${current.title}**, consisting of ${summarizeArchitecture(current, allTypes)}.`);
+    }
+    out.push('');
   }
-  out.push('');
 
   // Decision
-  out.push('## Decision');
-  out.push('');
+  if (want('decision')) {
+    out.push('## Decision');
+    out.push('');
 
   if (diff) {
     out.push(statsLine(diff));
@@ -253,63 +289,77 @@ export function generateAdrMarkdown({
       out.push('');
     }
   }
+  } // end Decision
 
   // Consequences
-  out.push('## Consequences');
-  out.push('');
+  if (want('consequences')) {
+    out.push('## Consequences');
+    out.push('');
 
-  if (diff) {
-    const allComps = [...baseline.components, ...current.components];
-    const { positive, risks, followUps } = inferConsequences(diff, allTypes, allComps);
-    out.push('### ✅ Positive');
-    positive.forEach((p) => out.push(`- ${p}`));
-    out.push('');
-    out.push('### ⚠️ Risks & things to verify');
-    risks.forEach((r) => out.push(`- ${r}`));
-    out.push('');
-    if (followUps.length) {
-      out.push('### 📋 Follow-ups');
-      followUps.forEach((f) => out.push(`- ${f}`));
+    if (diff) {
+      const allComps = [...baseline.components, ...current.components];
+      const { positive, risks, followUps } = inferConsequences(diff, allTypes, allComps);
+      out.push('### ✅ Positive');
+      positive.forEach((p) => out.push(`- ${p}`));
+      out.push('');
+      out.push('### ⚠️ Risks & things to verify');
+      risks.forEach((r) => out.push(`- ${r}`));
+      out.push('');
+      if (followUps.length) {
+        out.push('### 📋 Follow-ups');
+        followUps.forEach((f) => out.push(`- ${f}`));
+        out.push('');
+      }
+    } else {
+      out.push('_(Document positive outcomes, risks, and follow-ups once baseline diff is available.)_');
       out.push('');
     }
-  } else {
-    out.push('_(Document positive outcomes, risks, and follow-ups once baseline diff is available.)_');
-    out.push('');
   }
 
   // Diagrams
-  out.push('## Diagrams');
-  out.push('');
+  if (want('diagrams')) {
+    // Build the list of diagrams to embed. If the caller passed an explicit
+    // `diagrams` array, use it verbatim (so they can include sequence
+    // diagrams, exclude the diff, etc.). Otherwise fall back to the
+    // historical baseline / current / diff trio.
+    let diagramList;
+    if (Array.isArray(diagrams)) {
+      diagramList = diagrams.filter((d) => d && d.code && (d.include !== false));
+    } else {
+      diagramList = [];
+      if (baseline && baselineMermaid) {
+        diagramList.push({ label: 'Before (baseline)', code: baselineMermaid });
+      }
+      if (mermaid) {
+        diagramList.push({ label: baseline ? 'After (proposed)' : 'Architecture', code: mermaid });
+      }
+      if (baseline && diffMermaid) {
+        diagramList.push({
+          label: 'Diff overview',
+          code: diffMermaid,
+          legend: 'Legend: green = added · red dashed = removed · amber = modified'
+        });
+      }
+    }
 
-  if (baseline && baselineMermaid) {
-    out.push('### Before (baseline)');
-    out.push('');
-    out.push('```mermaid');
-    out.push(baselineMermaid);
-    out.push('```');
-    out.push('');
-  }
-
-  out.push(baseline ? '### After (proposed)' : '### Architecture');
-  out.push('');
-  out.push('```mermaid');
-  out.push(mermaid);
-  out.push('```');
-  out.push('');
-
-  if (baseline && diffMermaid) {
-    out.push('### Diff overview');
-    out.push('');
-    out.push('> Legend: green = added · red dashed = removed · amber = modified');
-    out.push('');
-    out.push('```mermaid');
-    out.push(diffMermaid);
-    out.push('```');
-    out.push('');
+    if (diagramList.length) {
+      out.push('## Diagrams');
+      out.push('');
+      diagramList.forEach((d) => {
+        out.push(`### ${d.label || 'Diagram'}`);
+        out.push('');
+        if (d.legend) { out.push(`> ${d.legend}`); out.push(''); }
+        if (d.description) { out.push(d.description); out.push(''); }
+        out.push('```mermaid');
+        out.push(d.code);
+        out.push('```');
+        out.push('');
+      });
+    }
   }
 
   // Alternatives considered
-  if (alternatives && alternatives.trim()) {
+  if (want('alternatives') && alternatives && alternatives.trim()) {
     out.push('## Alternatives considered');
     out.push('');
     out.push(alternatives.trim());
@@ -317,7 +367,7 @@ export function generateAdrMarkdown({
   }
 
   // Related ADRs
-  if (relatedAdrs && relatedAdrs.trim()) {
+  if (want('related') && relatedAdrs && relatedAdrs.trim()) {
     out.push('## Related ADRs');
     out.push('');
     relatedAdrs.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line) => {
@@ -327,13 +377,24 @@ export function generateAdrMarkdown({
   }
 
   // Reviewers / sign-off
-  if (reviewers && reviewers.trim()) {
+  if (want('reviewers') && reviewers && reviewers.trim()) {
     out.push('## Reviewers & sign-off');
     out.push('');
     reviewers.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line) => {
       out.push(`- [ ] ${line}`);
     });
     out.push('');
+  }
+
+  // Custom user-added sections
+  if (Array.isArray(customSections)) {
+    customSections.forEach((sec) => {
+      const heading = (sec?.heading || '').trim();
+      const body = (sec?.body || '').trim();
+      if (!heading && !body) return;
+      if (heading) { out.push(`## ${heading}`); out.push(''); }
+      if (body) { out.push(body); out.push(''); }
+    });
   }
 
   out.push('---');

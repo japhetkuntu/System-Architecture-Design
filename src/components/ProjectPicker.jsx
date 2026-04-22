@@ -9,7 +9,8 @@ export default function ProjectPicker({
   listCloudProjects,
   createCloudProject,
   renameCloudProject,
-  deleteCloudProject
+  deleteCloudProject,
+  onConfirm
 }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -67,16 +68,24 @@ export default function ProjectPicker({
     }
   };
 
-  const remove = async (id) => {
-    if (!window.confirm('Delete this project? All architectures inside it will also be deleted.')) return;
-    setErr('');
-    try {
-      await deleteCloudProject(id);
-      setProjects((prev) => prev.filter((p) => p.id !== id));
-      if (activeProjectId === id) onSelect?.(null);
-    } catch (e) {
-      setErr(e?.message || 'Delete failed');
-    }
+  const remove = async (id, name) => {
+    if (!onConfirm) return;
+    onConfirm({
+      title: `Delete project "${name}"?`,
+      message: `All architectures inside "${name}" will also be deleted. This cannot be undone.`,
+      destructive: true,
+      confirmLabel: 'Yes, delete project',
+      onConfirm: async () => {
+        setErr('');
+        try {
+          await deleteCloudProject(id);
+          setProjects((prev) => prev.filter((p) => p.id !== id));
+          if (activeProjectId === id) onSelect?.(null);
+        } catch (e) {
+          setErr(e?.message || 'Delete failed');
+        }
+      }
+    });
   };
 
   return (
@@ -155,7 +164,7 @@ export default function ProjectPicker({
                   <button type="button" className="icon-btn" title="Rename"
                     onClick={() => { setRenamingId(p.id); setRenameValue(p.name); }}>✏️</button>
                   <button type="button" className="icon-btn danger" title="Delete project"
-                    onClick={() => remove(p.id)}>×</button>
+                    onClick={() => remove(p.id, p.name)}>×</button>
                 </div>
               </li>
             ))}

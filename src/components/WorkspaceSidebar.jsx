@@ -44,6 +44,7 @@ export default function WorkspaceSidebar({
   onNewBlank,
   onSaveCurrentLocal,
   onConfirm,
+  onPrompt,
   onToast
 }) {
   const [projects, setProjects] = useState([]);
@@ -423,8 +424,18 @@ export default function WorkspaceSidebar({
               <div className="ws-arch-actions">
                 <button type="button" className="icon-btn" title="Rename"
                   onClick={() => {
-                    const name = window.prompt('Rename doc:', d.name);
-                    if (name && name.trim()) onRenameDoc?.(d.id, name.trim());
+                    if (!onPrompt) return;
+                    onPrompt({
+                      title: 'Rename document',
+                      message: 'Enter a new name for this saved architecture.',
+                      defaultValue: d.name,
+                      placeholder: 'Document name',
+                      submitLabel: 'Rename',
+                      onConfirm: (name) => {
+                        const trimmed = name?.trim();
+                        if (trimmed) onRenameDoc?.(d.id, trimmed);
+                      }
+                    });
                   }}>✏️</button>
                 <button type="button" className="icon-btn danger" title="Delete"
                   onClick={() => onDeleteDoc?.(d.id)}>×</button>

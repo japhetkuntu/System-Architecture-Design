@@ -13,7 +13,8 @@ export default function CloudGallery({
   moveCloudArchitectureToProject,
   listCloudProjects,
   onOpenProjects,
-  onLoaded
+  onLoaded,
+  onConfirm
 }) {
   const [items, setItems] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -58,15 +59,23 @@ export default function CloudGallery({
     } finally { setBusyId(null); }
   };
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Delete this cloud architecture for everyone?')) return;
-    setBusyId(id); setErr('');
-    try {
-      await deleteCloudArchitecture(id);
-      setItems((prev) => prev.filter((x) => x.id !== id));
-    } catch (e) {
-      setErr(e?.message || 'Delete failed');
-    } finally { setBusyId(null); }
+  const handleDelete = async (id, title) => {
+    if (!onConfirm) return;
+    onConfirm({
+      title: `Delete "${title || 'Untitled'}"?`,
+      message: 'Delete this cloud architecture for everyone? This action cannot be undone.',
+      destructive: true,
+      confirmLabel: 'Yes, delete',
+      onConfirm: async () => {
+        setBusyId(id); setErr('');
+        try {
+          await deleteCloudArchitecture(id);
+          setItems((prev) => prev.filter((x) => x.id !== id));
+        } catch (e) {
+          setErr(e?.message || 'Delete failed');
+        } finally { setBusyId(null); }
+      }
+    });
   };
 
   const handleMove = async (id, projectId) => {
@@ -172,7 +181,7 @@ export default function CloudGallery({
                     <button type="button" className="icon-btn" title="Copy share link"
                       onClick={() => copyLink(it.id)}>🔗</button>
                     <button type="button" className="icon-btn danger" title="Delete from cloud"
-                      onClick={() => handleDelete(it.id)} disabled={busyId === it.id}>×</button>
+                      onClick={() => handleDelete(it.id, it.title)} disabled={busyId === it.id}>×</button>
                   </div>
                 </li>
               ))}

@@ -104,6 +104,7 @@ export default function AdrDialog({
   open, onClose,
   baseline, current, diff, allTypes,
   mermaid: mermaidCode, baselineMermaid, diffMermaid,
+  sequences = [],
   filenameBase
 }) {
   const [number, setNumber] = useState('');
@@ -117,6 +118,61 @@ export default function AdrDialog({
   const [previewMode, setPreviewMode] = useState('rendered');
   const previewRef = useRef(null);
 
+  // Section toggles — every major block can be turned off.
+  const [sections, setSections] = useState({
+    context: true, decision: true, consequences: true,
+    diagrams: true, alternatives: true, related: true, reviewers: true
+  });
+  const toggleSection = (key) => setSections((s) => ({ ...s, [key]: !s[key] }));
+
+  // Per-diagram include/exclude. Built from the diagrams that are actually
+  // available right now (baseline / current / diff / each detected sequence).
+  // We keep an explicit `excluded` set so that toggling stays stable even as
+  // upstream regenerates the mermaid string on every keystroke.
+  const [excludedDiagrams, setExcludedDiagrams] = useState(() => new Set());
+  const toggleDiagram = (id) => setExcludedDiagrams((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // Custom user-added sections (heading + markdown body).
+  const [customSections, setCustomSections] = useState([]);
+  const addCustomSection = () => setCustomSections((s) => [...s, { id: `cs-${Date.now()}`, heading: 'New section', body: '' }]);
+  const updateCustomSection = (id, patch) => setCustomSections((s) => s.map((x) => x.id === id ? { ...x, ...patch } : x));
+  const removeCustomSection = (id) => setCustomSections((s) => s.filter((x) => x.id !== id));
+
+  // Build the master list of diagrams the user can toggle.
+  const availableDiagrams = useMemo(() => {
+    const list = [];
+    if (baseline && baselineMermaid) {
+      list.push({ id: 'baseline', label: 'Before (baseline)', code: baselineMermaid });
+    }
+    if (mermaidCode) {
+      list.push({ id: 'current', label: baseline ? 'After (proposed)' : 'Architecture', code: mermaidCode });
+    }
+    if (baseline && diffMermaid) {
+      list.push({
+        id: 'diff', label: 'Diff overview', code: diffMermaid,
+        legend: 'Legend: green = added · red dashed = removed · amber = modified'
+      });
+    }
+    (sequences || []).forEach((seq) => {
+      list.push({
+        id: `seq-${seq.id}`,
+        label: `Sequence — ${seq.name}`,
+        code: seq.mermaid,
+        description: `Auto-detected flow with ${seq.stepCount} step${seq.stepCount === 1 ? '' : 's'}.`
+      });
+    });
+    return list;
+  }, [baseline, baselineMermaid, mermaidCode, diffMermaid, sequences]);
+
+  const includedDiagrams = useMemo(
+    () => availableDiagrams.filter((d) => !excludedDiagrams.has(d.id)),
+    [availableDiagrams, excludedDiagrams]
+  );
+
   const md = useMemo(() => {
     if (!open) return '';
     return generateAdrMarkdown({
@@ -125,9 +181,12 @@ export default function AdrDialog({
       title: titleOverride || current.title,
       baseline, current, diff, allTypes,
       mermaid: mermaidCode, baselineMermaid, diffMermaid,
-      alternatives, relatedAdrs, reviewers
+      alternatives, relatedAdrs, reviewers,
+      sections,
+      diagrams: includedDiagrams,
+      customSections
     });
-  }, [open, number, status, author, titleOverride, current, baseline, diff, allTypes, mermaidCode, baselineMermaid, diffMermaid, alternatives, relatedAdrs, reviewers]);
+  }, [open, number, status, author, titleOverride, current, baseline, diff, allTypes, mermaidCode, baselineMermaid, diffMermaid, alternatives, relatedAdrs, reviewers, sections, includedDiagrams, customSections]);
 
   const rendered = useMemo(
     () => open ? markdownToHtml(md, { mermaidEnabled: previewMode === 'rendered' }) : { html: '', blocks: [] },
@@ -264,7 +323,86 @@ export default function AdrDialog({
                 placeholder={'Jane D. — platform lead\nKwame O. — security'}
               />
             </label>
-          </div>
+            <div className="adr-field full adr-toggles">
+              <span className="adr-toggles-title">Include sections</span>
+              <div className="adr-toggles-grid">
+                {[
+                  ['context', 'Context'],
+                  ['decision', 'Decision'],
+                  ['consequences', 'Consequences'],
+                  ['diagrams', 'Diagrams'],
+                  ['alternatives', 'Alternatives'],
+                  ['related', 'Related ADRs'],
+                  ['reviewers', 'Reviewers']
+                ].map(([key, label]) => (
+                  <label key={key} className="adr-chip">
+                    <input
+                      type="checkbox"
+                      checked={!!sections[key]}
+                      onChange={() => toggleSection(key)}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {sections.diagrams && availableDiagrams.length > 0 && (
+              <div className="adr-field full adr-toggles">
+                <span className="adr-toggles-title">
+                  Include diagrams <em className="muted">({includedDiagrams.length} of {availableDiagrams.length})</em>
+                </span>
+                <div className="adr-toggles-grid">
+                  {availableDiagrams.map((d) => (
+                    <label key={d.id} className="adr-chip">
+                      <input
+                        type="checkbox"
+                        checked={!excludedDiagrams.has(d.id)}
+                        onChange={() => toggleDiagram(d.id)}
+                      />
+                      <span>{d.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="adr-field full adr-custom-sections">
+              <div className="adr-custom-head">
+                <span className="adr-toggles-title">Custom sections</span>
+                <button type="button" className="link-btn" onClick={addCustomSection}>+ Add section</button>
+              </div>
+              {customSections.length === 0 && (
+                <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>
+                  Add your own freeform sections (e.g. <em>Security review</em>, <em>Migration plan</em>, <em>Cost impact</em>).
+                </p>
+              )}
+              {customSections.map((sec, idx) => (
+                <div key={sec.id} className="adr-custom-section">
+                  <div className="adr-custom-section-head">
+                    <input
+                      type="text"
+                      value={sec.heading}
+                      onChange={(e) => updateCustomSection(sec.id, { heading: e.target.value })}
+                      placeholder={`Section ${idx + 1} heading`}
+                    />
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => removeCustomSection(sec.id)}
+                      title="Remove section"
+                      aria-label="Remove section"
+                    >×</button>
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={sec.body}
+                    onChange={(e) => updateCustomSection(sec.id, { body: e.target.value })}
+                    placeholder="Markdown body…"
+                  />
+                </div>
+              ))}
+            </div>          </div>
 
           <div className="adr-preview-wrap">
             <div className="adr-preview-head">

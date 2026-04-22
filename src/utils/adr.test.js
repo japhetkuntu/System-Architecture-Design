@@ -56,4 +56,62 @@ describe('generateAdrMarkdown', () => {
     const md = generateAdrMarkdown({ ...base, number: 12 });
     expect(md).toMatch(/ADR[- ]0012/);
   });
+
+  it('omits sections when toggled off via `sections`', () => {
+    const md = generateAdrMarkdown({
+      ...base,
+      sections: { context: false, decision: false, consequences: false, diagrams: false }
+    });
+    expect(md).not.toMatch(/## Context/);
+    expect(md).not.toMatch(/## Decision/);
+    expect(md).not.toMatch(/## Consequences/);
+    expect(md).not.toMatch(/## Diagrams/);
+  });
+
+  it('renders an explicit `diagrams` list (sequence diagrams etc.)', () => {
+    const md = generateAdrMarkdown({
+      ...base,
+      diagrams: [
+        { id: 'current', label: 'Architecture', code: 'flowchart LR\n  a' },
+        { id: 'seq-1',   label: 'Sequence — User', code: 'sequenceDiagram\n  A->>B: hi' }
+      ]
+    });
+    expect(md).toMatch(/### Architecture/);
+    expect(md).toMatch(/### Sequence — User/);
+    expect(md).toMatch(/sequenceDiagram/);
+  });
+
+  it('skips diagrams flagged include:false', () => {
+    const md = generateAdrMarkdown({
+      ...base,
+      diagrams: [
+        { id: 'a', label: 'Keep me',  code: 'flowchart LR\n  a', include: true },
+        { id: 'b', label: 'Drop me',  code: 'flowchart LR\n  b', include: false }
+      ]
+    });
+    expect(md).toMatch(/### Keep me/);
+    expect(md).not.toMatch(/### Drop me/);
+  });
+
+  it('emits user-supplied custom sections', () => {
+    const md = generateAdrMarkdown({
+      ...base,
+      customSections: [
+        { heading: 'Security review', body: 'Reviewed by AppSec on 2026-04-22.' }
+      ]
+    });
+    expect(md).toMatch(/## Security review/);
+    expect(md).toMatch(/Reviewed by AppSec/);
+  });
+
+  it('uses fallback icons for generic component types like service', () => {
+    const md = generateAdrMarkdown({
+      ...base,
+      current: {
+        ...base.current,
+        components: [{ id: 'a', type: 'service', name: 'API', notes: '', icon: '', color: '' }]
+      }
+    });
+    expect(md).toContain('⚙️ API');
+  });
 });

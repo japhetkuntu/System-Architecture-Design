@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -14,6 +14,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import ComponentIcon from '../utils/componentIcons.jsx';
+import PromptDialog from './PromptDialog.jsx';
 
 /**
  * Interactive, draw.io-style canvas backed by React Flow.
@@ -78,6 +79,7 @@ function CanvasInner({
 }) {
   const wrapperRef = useRef(null);
   const { screenToFlowPosition } = useReactFlow();
+  const [prompt, setPrompt] = useState(null);
 
   const nodeTypes = useMemo(() => ({ component: ComponentNode }), []);
   const edgeTypes = useMemo(() => ({ multilabel: MultiLabelEdge }), []);
@@ -88,30 +90,37 @@ function CanvasInner({
   // only the label.
   const editStep = useCallback((it) => {
     const def = `${it.step}: ${it.label || ''}`;
-    const next = window.prompt(
-      'Edit this connector. Format: "<step>: <label>".\n' +
-      '• Change the number to renumber when this fires in the simulation.\n' +
-      '• Leave the label blank to fall back to the relationship type.',
-      def
-    );
-    if (next === null) return;
-    const m = next.match(/^\s*(\d+)\s*[:.·]\s*(.*)$/);
-    let newLabel;
-    let newStep = null;
-    if (m) {
-      newStep = parseInt(m[1], 10);
-      newLabel = m[2].trim();
-    } else {
-      newLabel = next.trim();
-    }
-    if (newLabel !== (it.label || '')) {
-      onUpdateConnection?.(it.connId, { label: newLabel });
-    }
-    if (newStep != null && onReorderConnection) {
-      const fromIdx = it.step - 1;
-      const toIdx = Math.max(0, Math.min(connections.length - 1, newStep - 1));
-      if (fromIdx !== toIdx) onReorderConnection(fromIdx, toIdx);
-    }
+    setPrompt({
+      title: 'Edit connector',
+      message: 'Enter a new step number and label for this connector.\nUse "<step>: <label>" format. Leave the label blank to fall back to the relationship type.',
+      defaultValue: def,
+      placeholder: '1: calls',
+      submitLabel: 'Save',
+      cancelLabel: 'Cancel',
+      onConfirm: (next) => {
+        const value = next?.trim();
+        if (value == null) return;
+        const m = value.match(/^\s*(\d+)\s*[:.·]\s*(.*)$/);
+        let newLabel;
+        let newStep = null;
+        if (m) {
+          newStep = parseInt(m[1], 10);
+          newLabel = m[2].trim();
+        } else {
+          newLabel = value;
+        }
+        if (newLabel !== (it.label || '')) {
+          onUpdateConnection?.(it.connId, { label: newLabel });
+        }
+        if (newStep != null && onReorderConnection) {
+          const fromIdx = it.step - 1;
+          const toIdx = Math.max(0, Math.min(connections.length - 1, newStep - 1));
+          if (fromIdx !== toIdx) onReorderConnection(fromIdx, toIdx);
+        }
+        setPrompt(null);
+      },
+      onCancel: () => setPrompt(null)
+    });
   }, [onUpdateConnection, onReorderConnection, connections.length]);
 
   const removeStep = useCallback((connId) => {
@@ -353,6 +362,18 @@ function CanvasInner({
           </div>
         </div>
       )}
+      <PromptDialog
+        open={!!prompt}
+        title={prompt?.title}
+        message={prompt?.message}
+        defaultValue={prompt?.defaultValue}
+        placeholder={prompt?.placeholder}
+        submitLabel={prompt?.submitLabel}
+        cancelLabel={prompt?.cancelLabel}
+        textarea={prompt?.textarea}
+        onConfirm={prompt?.onConfirm}
+        onCancel={prompt?.onCancel}
+      />
     </div>
   );
 }

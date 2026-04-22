@@ -21,7 +21,7 @@ const GRADE_COLOR = {
  * Temporal redesign" button materialises the alternative architecture so
  * the user can see the difference in the Diff tab.
  */
-export default function AssessmentPanel({ assessment, onSelectComponent, onApplyRedesign, hasBaseline }) {
+export default function AssessmentPanel({ assessment, onSelectComponent, onApplyRedesign, hasBaseline, onConfirm }) {
   const [collapsed, setCollapsed] = useState(false);
   const [filter, setFilter] = useState('all');
 
@@ -40,12 +40,19 @@ export default function AssessmentPanel({ assessment, onSelectComponent, onApply
 
   const handleApply = () => {
     if (!onApplyRedesign) return;
-    const proceed = window.confirm(
-      hasBaseline
+    if (!onConfirm) {
+      onApplyRedesign();
+      return;
+    }
+    onConfirm({
+      title: hasBaseline ? 'Apply Temporal redesign?' : 'Capture baseline and redesign?',
+      message: hasBaseline
         ? 'Replace your current baseline with today\'s design and apply the Temporal redesign on top? You can compare the two in the Diff tab.'
-        : 'Apply the Temporal redesign? Your current architecture will be saved as the baseline so you can compare them side-by-side in the Diff tab.'
-    );
-    if (proceed) onApplyRedesign();
+        : 'Apply the Temporal redesign? Your current architecture will be saved as the baseline so you can compare them side-by-side in the Diff tab.',
+      destructive: false,
+      confirmLabel: hasBaseline ? 'Yes, apply redesign' : 'Yes, capture and apply',
+      onConfirm: () => onApplyRedesign()
+    });
   };
 
   return (

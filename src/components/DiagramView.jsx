@@ -185,39 +185,104 @@ export default function DiagramView({
     downloadBlob(new Blob([xml], { type: 'image/svg+xml' }), `${filenameBase}.svg`);
   };
 
-  const downloadPng = async () => {
+  // Rasterise the rendered SVG to a canvas at the given pixel scale, then
+  // hand it back as a Blob in the requested image type. Uses the SVG's
+  // intrinsic viewBox dimensions (not the on-screen size) so the export is
+  // pixel-perfect regardless of zoom / scroll position.
+  const rasterize = async ({ scale = 2, type = 'image/png', background = '#ffffff' } = {}) => {
     const svg = svgWrapRef.current?.querySelector('svg');
-    if (!svg) return;
+    if (!svg) return null;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+    // Prefer viewBox dimensions for crisp output that matches the diagram's
+    // intrinsic aspect ratio rather than the scrolled DOM rect.
+    let w, h;
+    const vb = svg.viewBox?.baseVal;
+    if (vb && vb.width && vb.height) {
+      w = Math.ceil(vb.width); h = Math.ceil(vb.height);
+    } else {
+      const bbox = svg.getBoundingClientRect();
+      w = Math.ceil(bbox.width || 1200); h = Math.ceil(bbox.height || 800);
+    }
+    clone.setAttribute('width', w);
+    clone.setAttribute('height', h);
+
+    const xml = new XMLSerializer().serializeToString(clone);
+    const dataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(xml)));
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = dataUrl;
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    const ctx = canvas.getContext('2d');
+    if (background) {
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.drawImage(img, 0, 0, w, h);
+    return await new Promise((res) => canvas.toBlob(res, type, type === 'image/jpeg' ? 0.95 : undefined));
+  };
+
+  const downloadPng = async (scale = 2) => {
     setDownloading(true);
     try {
-      const clone = svg.cloneNode(true);
-      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      const bbox = svg.getBoundingClientRect();
-      const w = Math.ceil(bbox.width || 1200);
-      const h = Math.ceil(bbox.height || 800);
-      clone.setAttribute('width', w);
-      clone.setAttribute('height', h);
-      const xml = new XMLSerializer().serializeToString(clone);
-      const dataUrl = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(xml)));
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = dataUrl;
-      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
-      const scale = 2;
-      const canvas = document.createElement('canvas');
-      canvas.width = w * scale;
-      canvas.height = h * scale;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(scale, scale);
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob((blob) => {
-        if (blob) downloadBlob(blob, `${filenameBase}.png`);
-      }, 'image/png');
-    } finally {
-      setDownloading(false);
-    }
+      const blob = await rasterize({ scale, type: 'image/png' });
+      if (blob) downloadBlob(blob, `${filenameBase}${scale > 2 ? `@${scale}x` : ''}.png`);
+    } finally { setDownloading(false); }
+  };
+
+  const downloadJpg = async (scale = 2) => {
+    setDownloading(true);
+    try {
+      const blob = await rasterize({ scale, type: 'image/jpeg', background: '#ffffff' });
+      if (blob) downloadBlob(blob, `${filenameBase}.jpg`);
+    } finally { setDownloading(false); }
+  };
+
+  const downloadMermaid = () => {
+    if (!code) return;
+    downloadBlob(new Blob([code], { type: 'text/plain' }), `${filenameBase}.mmd`);
+  };
+
+  const copyAsImage = async () => {
+    try {
+      const blob = await rasterize({ scale: 2, type: 'image/png' });
+      if (!blob || !navigator.clipboard?.write) return;
+      // eslint-disable-next-line no-undef
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    } catch { /* clipboard not available */ }
+  };
+
+  // Open a print-friendly window with the SVG inlined; the user picks
+  // "Save as PDF" from the system print dialog — vector-perfect PDF, no
+  // distortion, no extra dependency.
+  const printPdf = () => {
+    const svg = svgWrapRef.current?.querySelector('svg');
+    if (!svg) return;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    const xml = new XMLSerializer().serializeToString(clone);
+    const w = window.open('', '_blank');
+    if (!w) return;
+    const safeTitle = (title || filenameBase || 'Diagram').replace(/</g, '&lt;');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"/><title>${safeTitle}</title>
+      <style>
+        html,body{margin:0;padding:0;background:#fff;font-family:system-ui,sans-serif;color:#111;}
+        h1{font-size:16px;margin:16px 24px 8px;}
+        .wrap{padding:0 24px 24px;}
+        svg{max-width:100%;height:auto;}
+        @media print { h1 { display:none; } .wrap { padding: 0; } }
+      </style></head><body>
+      <h1>${safeTitle}</h1>
+      <div class="wrap">${xml}</div>
+      </body></html>`);
+    w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch { /* noop */ } }, 400);
   };
 
   if (!code) {
@@ -229,12 +294,20 @@ export default function DiagramView({
       <div className="diagram-header">
         {title && <h2 className="diagram-title">{title}</h2>}
         <div className="diagram-actions">
-          <button type="button" className="secondary-btn" onClick={downloadSvg} disabled={!!renderError}>
-            Download SVG
-          </button>
-          <button type="button" className="secondary-btn" onClick={downloadPng} disabled={!!renderError || downloading}>
-            {downloading ? 'Rendering…' : 'Download PNG'}
-          </button>
+          <DownloadMenu
+            disabled={!!renderError || downloading}
+            label={downloading ? 'Rendering…' : '⬇ Download'}
+            actions={[
+              { label: 'SVG (vector, lossless)', onClick: downloadSvg },
+              { label: 'PNG — standard (2×)',     onClick: () => downloadPng(2) },
+              { label: 'PNG — high-res (4×)',     onClick: () => downloadPng(4) },
+              { label: 'JPG (white background)',    onClick: () => downloadJpg(2) },
+              { label: 'Mermaid source (.mmd)',     onClick: downloadMermaid },
+              { label: 'Print / Save as PDF',       onClick: printPdf }
+            ]}
+          />
+          <button type="button" className="secondary-btn" onClick={copyAsImage} disabled={!!renderError || downloading}
+            title="Copy diagram as PNG to clipboard">⧉ Copy</button>
         </div>
       </div>
 
@@ -249,6 +322,43 @@ export default function DiagramView({
       <div className="diagram-scroll">
         <div ref={svgWrapRef} className="diagram-svg" />
       </div>
+    </div>
+  );
+}
+
+// Tiny accessible dropdown menu used by the diagram toolbar.
+function DownloadMenu({ label, actions, disabled }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div className="download-menu" ref={ref}>
+      <button type="button" className="secondary-btn" onClick={() => setOpen((v) => !v)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}>
+        {label} ▾
+      </button>
+      {open && (
+        <div className="download-menu-popover" role="menu">
+          {actions.map((a) => (
+            <button
+              key={a.label}
+              type="button"
+              role="menuitem"
+              className="download-menu-item"
+              onClick={() => { setOpen(false); a.onClick(); }}
+            >{a.label}</button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
