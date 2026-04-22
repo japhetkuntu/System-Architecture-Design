@@ -327,17 +327,9 @@ export default function App() {
           </div>
 
           <button type="button" className="secondary-btn" onClick={() => setWorkspaceOpen(true)}
-            title="Open saved architectures (⌘K)">📚 Workspace</button>
-          {b.cloudEnabled && (
-            <>
-              <button type="button" className="secondary-btn" onClick={() => setProjectsOpen(true)}
-                title="Choose or create a shared project">
-                📁 {activeProjectName || 'No project'}
-              </button>
-              <button type="button" className="secondary-btn" onClick={() => setCloudOpen(true)}
-                title="Browse architectures in the shared cloud workspace">🌐 Cloud</button>
-            </>
-          )}
+            title="Browse projects, files, and saved architectures (⌘K)">
+            📚 Workspace{b.cloudEnabled && activeProjectName ? ` → ${activeProjectName}` : ''}
+          </button>
           <button type="button" className="secondary-btn" onClick={b.loadSample} title="Load a worked example">✨ Sample</button>
           <button type="button" className="danger-btn" onClick={askClearAll} title="Clear everything">🗑 Clear</button>
         </div>
@@ -469,6 +461,16 @@ export default function App() {
               <LintsPanel lints={b.lints} />
               <AssessmentPanel
                 assessment={b.assessment}
+                hasBaseline={!!b.baseline}
+                onApplyRedesign={() => {
+                  const ok = b.applyTemporalRedesign();
+                  if (ok) {
+                    setMode('diff');
+                    showToast('Temporal redesign applied — see Diff tab');
+                  } else {
+                    showToast('Nothing to redesign — no orchestration candidates');
+                  }
+                }}
                 onSelectComponent={(id) => { setSelection(new Set([id])); showToast('Selected'); }}
               />
               {b.components.length > 0 && !b.baseline && (
@@ -553,21 +555,36 @@ export default function App() {
       <WorkspaceSidebar
         open={workspaceOpen}
         onClose={() => setWorkspaceOpen(false)}
+        cloudEnabled={b.cloudEnabled}
+        cloudId={b.cloudId}
+        activeProjectId={b.activeProjectId}
+        setActiveProjectId={b.setActiveProjectId}
+        saveCloudArchitecture={b.saveCloudArchitecture}
+        loadCloudArchitecture={b.loadCloudArchitecture}
+        listCloudArchitectures={b.listCloudArchitectures}
+        deleteCloudArchitecture={b.deleteCloudArchitecture}
+        moveCloudArchitectureToProject={b.moveCloudArchitectureToProject}
+        listCloudProjects={b.listCloudProjects}
+        createCloudProject={b.createCloudProject}
+        renameCloudProject={b.renameCloudProject}
+        deleteCloudProject={b.deleteCloudProject}
         docs={b.docs}
         activeDocId={b.activeDocId}
-        currentTitle={b.title}
-        onLoad={(id) => { b.loadDoc(id); clearSelection(); setWorkspaceOpen(false); showToast('Loaded'); }}
-        onRename={(id, name) => { b.renameDoc(id, name); showToast('Renamed'); }}
-        onDuplicate={(id) => { b.duplicateDoc(id); showToast('Duplicated'); }}
-        onDelete={(id) => setConfirm({
+        onLoadDoc={(id) => { b.loadDoc(id); clearSelection(); dismissWelcome(); showToast('Loaded'); }}
+        onRenameDoc={(id, name) => { b.renameDoc(id, name); showToast('Renamed'); }}
+        onDeleteDoc={(id) => setConfirm({
           title: 'Delete this saved architecture?',
           message: 'This only deletes the saved copy. The currently open diagram is not affected.',
           destructive: true,
           confirmLabel: 'Yes, delete',
           onConfirm: () => { b.deleteDoc(id); setConfirm(null); showToast('Deleted'); }
         })}
-        onSaveCurrent={saveCurrentAsDoc}
-        onNewDoc={newDocAction}
+        currentTitle={b.title}
+        hasContent={b.components.length > 0}
+        onNewBlank={() => { newDocAction(); setWorkspaceOpen(false); }}
+        onSaveCurrentLocal={() => { saveCurrentAsDoc(); }}
+        onConfirm={(cfg) => setConfirm(cfg)}
+        onToast={showToast}
       />
 
       <ConfirmDialog

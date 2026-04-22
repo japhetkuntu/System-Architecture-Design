@@ -474,10 +474,12 @@ export function buildMermaid({ components, mergedEdges, allTypes, layoutDir = 'L
     const from = idMap[e.fromId];
     const to = idMap[e.toId];
     if (!from || !to) return;
+    // Each parallel label / note renders on its own line so multiple
+    // connections between the same two nodes stay readable.
     const parts = [];
-    if (e.labels.length) parts.push(e.labels.join(' • '));
-    if (e.notes && e.notes.length) parts.push(`📝 ${e.notes.join(' · ')}`);
-    const label = parts.join(' — ');
+    if (e.labels.length) parts.push(e.labels.join('\n'));
+    if (e.notes && e.notes.length) parts.push(e.notes.map((n) => `📝 ${n}`).join('\n'));
+    const label = parts.join('\n');
     lines.push(edgeLine(from, to, e.arrow || '-->', label));
   });
 
@@ -733,196 +735,173 @@ export function runLints({ components, connections }) {
   return lints;
 }
 
-// ---- Resilience / durability assessment (pure) --------------------------
-// A heuristic, opinionated review that surfaces likely failure modes a
-// senior architect would flag in a design review. Each finding has a
-// severity, a category, a short message, and a concrete recommendation.
-export function assessResilience({ components, connections, allTypes }) {
+// ---- Workflow orchestration analysis (pure) ----------------------------
+// Identify systems that cannot be durable on their own — they hang, double-
+// charge, leak resources, or leave inconsistent state when a downstream fails
+// or a bug throws mid-flow. The recommendation is to wrap them in a durable
+// execution engine (Temporal / Step Functions / Cadence) so retries, timers,
+// and compensations are first-class.
+//
+// Returns:
+//   {
+//     candidates:  [{ id, name, type, severity, riskScore, reasons[], recommendation }],
+//     findings:    [{ severity, category, message, recommendation, componentId }],
+//     score, grade, summary
+//   }
+const NON_TRIVIAL_GROUPS = new Set(['Backend', 'Data', 'External', 'Messaging', 'Temporal']);
+const DURABLE_TYPES = new Set(['workflow', 'statemachine', 'saga']);
+const SYNC_KINDS = new Set(['calls', 'queries', 'commands', 'invokes', 'sends', 'integrates', 'uses', 'reads', 'writes']);
+const EXTERNAL_TYPES = new Set(['external']);
+
+export function analyzeOrchestration({ components, connections, allTypes }) {
   const findings = [];
+  const candidates = [];
   if (!components.length) {
-    return { findings, score: null, grade: 'N/A', summary: 'Add components to get an assessment.' };
+    return {
+      candidates, findings, score: null, grade: 'N/A',
+      summary: 'Add components to scan for orchestration risks.'
+    };
   }
 
   const types = allTypes || DEFAULT_TYPES;
   const byId = new Map(components.map((c) => [c.id, c]));
-  const typeOf = (id) => types[byId.get(id)?.type]?.label || byId.get(id)?.type || '';
   const groupOf = (id) => types[byId.get(id)?.type]?.group || '';
-  const hasGroup = (g) => components.some((c) => types[c.type]?.group === g);
-  const hasTypeKey = (k) => components.some((c) => c.type === k);
-  const countType = (k) => components.filter((c) => c.type === k).length;
-
-  const outDegree = new Map(components.map((c) => [c.id, 0]));
-  const inDegree  = new Map(components.map((c) => [c.id, 0]));
-  connections.forEach((e) => {
-    outDegree.set(e.fromId, (outDegree.get(e.fromId) || 0) + 1);
-    inDegree.set(e.toId,  (inDegree.get(e.toId)  || 0) + 1);
-  });
+  const typeOf  = (id) => byId.get(id)?.type || '';
 
   const add = (severity, category, message, recommendation, componentId = null) =>
     findings.push({ severity, category, message, recommendation, componentId });
 
-  // --- Single points of failure ------------------------------------------
-  // Anything other than the entry edge with a fan-in/fan-out > 4 and no
-  // peer of the same type is a likely SPOF.
+  // Build adjacency views once.
+  const outgoing = new Map(components.map((c) => [c.id, []]));
+  const incoming = new Map(components.map((c) => [c.id, []]));
+  connections.forEach((e) => {
+    outgoing.get(e.fromId)?.push(e);
+    incoming.get(e.toId)?.push(e);
+  });
+
+  // ---- Candidate detection: which components NEED a workflow? ----------
   components.forEach((c) => {
-    const fanIn  = inDegree.get(c.id)  || 0;
-    const fanOut = outDegree.get(c.id) || 0;
-    const peers = components.filter((x) => x.type === c.type).length;
-    if ((fanIn + fanOut) >= 4 && peers === 1 && c.type !== 'user') {
-      add('warn', 'Availability',
-        `"${c.name}" looks like a single point of failure (fan-in ${fanIn}, fan-out ${fanOut}, no peer of the same type).`,
-        `Run at least two instances behind a load balancer, or document why a single instance is acceptable.`,
+    if (DURABLE_TYPES.has(c.type)) return;            // already durable
+    if (groupOf(c.id) === 'Clients') return;          // user/SPA — not our problem
+    if (groupOf(c.id) === 'Edge') return;             // gateways/CDNs are stateless
+    if (groupOf(c.id) === 'Data') return;             // datastores aren't orchestrators
+    const out = outgoing.get(c.id) || [];
+
+    // 1. Multi-step synchronous orchestration ("god service" pattern).
+    const syncTargets = out.filter((e) => SYNC_KINDS.has(e.kind)
+      && NON_TRIVIAL_GROUPS.has(groupOf(e.toId))
+      && !DURABLE_TYPES.has(typeOf(e.toId)));
+    const distinctSyncTargets = new Set(syncTargets.map((e) => e.toId));
+
+    // 2. Synchronous calls to external systems.
+    const externalSync = out.filter((e) => SYNC_KINDS.has(e.kind) && EXTERNAL_TYPES.has(typeOf(e.toId)));
+
+    // 3. Mixed choreography: publishes events AND makes sync state-changing
+    //    calls. Mid-flight failures leave the world inconsistent.
+    const publishes = out.filter((e) => ['publishes', 'emits', 'notifies', 'fans-out'].includes(e.kind));
+    const sideEffects = out.filter((e) => ['commands', 'writes', 'invokes'].includes(e.kind));
+    const choreographySmell = publishes.length > 0 && sideEffects.length > 0;
+
+    // 4. Long synchronous chain (this component is N hops deep in a sync chain).
+    //    Cheap proxy: this component is itself called synchronously AND then makes
+    //    further sync calls — every hop multiplies failure probability.
+    const calledSync = (incoming.get(c.id) || []).some((e) => SYNC_KINDS.has(e.kind));
+    const chainHop = calledSync && syncTargets.length >= 1;
+
+    const reasons = [];
+    let riskScore = 0;
+    if (distinctSyncTargets.size >= 2) {
+      riskScore += 40 + (distinctSyncTargets.size - 2) * 15;
+      reasons.push(`Coordinates ${distinctSyncTargets.size} synchronous downstream services — a partial failure leaves the workflow half-done.`);
+    }
+    if (externalSync.length > 0) {
+      riskScore += 30;
+      reasons.push(`Calls ${externalSync.length} external system${externalSync.length === 1 ? '' : 's'} synchronously. A slow third party blocks the whole request thread.`);
+    }
+    if (choreographySmell) {
+      riskScore += 25;
+      reasons.push('Mixes side-effecting writes with event publishing in the same flow — there is no atomic "do-all-or-nothing".');
+    }
+    if (chainHop && distinctSyncTargets.size >= 2) {
+      riskScore += 15;
+      reasons.push('Sits in the middle of a long synchronous call chain. Retries cascade upward and timeouts compound.');
+    }
+
+    if (riskScore >= 30) {
+      const severity = riskScore >= 70 ? 'error' : riskScore >= 45 ? 'warn' : 'info';
+      candidates.push({
+        id: c.id,
+        name: c.name,
+        type: c.type,
+        severity,
+        riskScore: Math.min(100, riskScore),
+        reasons,
+        recommendation: `Wrap "${c.name}" in a Temporal workflow. Each downstream call becomes a retried activity, timeouts are explicit, and compensations roll back on failure — so the system stays consistent even when a dependency dies or a bug throws mid-flow.`
+      });
+      add(severity, 'Orchestration',
+        `"${c.name}" runs a non-durable multi-step flow.`,
+        `Wrap it in a Temporal workflow so every step is retried, every timeout is explicit, and partial failures are compensated.`,
         c.id);
     }
   });
 
-  // --- Edge / front door --------------------------------------------------
-  const hasFrontend = hasGroup('Clients');
-  const hasGateway  = hasTypeKey('apigateway') || hasTypeKey('loadbalancer') || hasTypeKey('edge');
-  if (hasFrontend && !hasGateway) {
-    add('warn', 'Edge',
-      'Clients appear to talk directly to backend services with no gateway, load balancer, or CDN in between.',
-      'Put an API gateway or load balancer at the front door for TLS termination, throttling, and routing.');
-  }
-
-  // --- Security -----------------------------------------------------------
-  const hasIdp = hasTypeKey('idp');
-  const hasBackend = hasGroup('Backend');
-  if (hasBackend && !hasIdp) {
-    add('warn', 'Security',
-      'No identity provider is shown. Authentication and authorization are implicit.',
-      'Add an IDP (e.g., Cognito, Auth0, Okta) and label which services authenticate via it.');
-  }
-  const hasSecrets = hasTypeKey('secrets');
-  if (hasBackend && !hasSecrets) {
-    add('info', 'Security',
-      'No secrets manager / KMS in the diagram.',
-      'Show how credentials and keys are stored (Secrets Manager / KMS / Vault) so reviewers can audit handling.');
-  }
-
-  // --- Observability ------------------------------------------------------
-  const hasTelemetry = hasTypeKey('telemetry');
-  if (!hasTelemetry && components.length >= 4) {
-    add('warn', 'Observability',
-      'No telemetry / metrics component is present.',
-      'Add a telemetry node (CloudWatch, Datadog, OpenTelemetry collector) and connect critical services to it with the “observes” edge.');
-  } else if (hasTelemetry) {
-    const observed = new Set(connections.filter((c) => c.kind === 'observes').map((c) => c.toId));
-    const criticalGroups = new Set(['Backend', 'Data', 'Edge', 'Temporal']);
-    const unobserved = components.filter((c) => criticalGroups.has(types[c.type]?.group || '') && !observed.has(c.id));
-    if (unobserved.length >= 3) {
-      add('info', 'Observability',
-        `${unobserved.length} critical components have no “observes” edge into telemetry.`,
-        'Wire every backend, data, edge, and orchestration component to telemetry so you can detect failures.');
-    }
-  }
-
-  // --- Data: backups / replication ---------------------------------------
-  const databases = components.filter((c) => ['database', 'warehouse', 'storage'].includes(c.type));
-  databases.forEach((db) => {
-    const hasReplica = connections.some((e) => e.fromId === db.id && e.kind === 'replicates');
-    if (!hasReplica) {
-      add('warn', 'Durability',
-        `"${db.name}" has no replication target. Loss of this datastore = data loss.`,
-        'Add a read replica / cross-region replica with the “replicates to” edge, and document RPO/RTO.',
-        db.id);
-    }
-  });
-
-  // --- Caching in front of slow stores -----------------------------------
-  const hasCache = hasTypeKey('cache');
-  const heavyReadDb = databases.some((db) =>
-    connections.some((e) => e.toId === db.id && (e.kind === 'reads' || e.kind === 'queries'))
-  );
-  if (heavyReadDb && !hasCache) {
-    add('info', 'Performance',
-      'A datastore is being read directly with no cache layer.',
-      'Consider adding a cache (Redis, Elasticache) in front of read-heavy datastores.');
-  }
-
-  // --- Async coupling: queues + workers ----------------------------------
+  // ---- Durability gap findings (only the orchestration-relevant ones) ---
   const queues = components.filter((c) => c.type === 'queue' || c.type === 'topic');
   queues.forEach((q) => {
     const consumers = connections.filter((e) => e.toId === q.id && e.kind === 'consumes');
     if (consumers.length === 0) {
-      add('warn', 'Reliability',
-        `Queue "${q.name}" has no consumer. Messages will pile up.`,
-        'Attach at least one consumer/worker, and add a DLQ (dead-letter queue) for poison messages.',
+      add('warn', 'Durability',
+        `Queue "${q.name}" has no consumer. Messages will pile up indefinitely.`,
+        'Attach a worker that consumes from this queue, ideally driven by a Temporal workflow so retries and DLQ routing are durable.',
         q.id);
     }
   });
-
-  // --- DLQ heuristic ------------------------------------------------------
   if (queues.length > 0) {
     const dlqLike = components.some((c) =>
       (c.type === 'queue' || c.type === 'topic') && /dlq|dead/i.test(c.name || '')
     );
     if (!dlqLike) {
-      add('info', 'Reliability',
+      add('info', 'Durability',
         'No dead-letter queue (DLQ) is shown for your async messaging.',
-        'Add a DLQ component (e.g., "orders_dlq") so failed messages are not silently dropped.');
+        'Add a DLQ so poison messages do not vanish. Temporal handles this automatically per workflow.');
     }
   }
 
-  // --- Workflow / temporal: timeouts and compensation --------------------
-  const workflows = components.filter((c) => c.type === 'workflow' || c.type === 'statemachine' || c.type === 'saga');
+  const workflows = components.filter((c) => DURABLE_TYPES.has(c.type));
   workflows.forEach((w) => {
-    const outgoing = connections.filter((e) => e.fromId === w.id);
-    const hasTimeout = outgoing.some((e) => e.kind === 'times-out-to');
-    const hasCompensate = outgoing.some((e) => e.kind === 'compensates');
+    const out = outgoing.get(w.id) || [];
+    const hasTimeout = out.some((e) => e.kind === 'times-out-to');
+    const hasCompensate = out.some((e) => e.kind === 'compensates');
     if (!hasTimeout) {
-      add('info', 'Resilience',
+      add('info', 'Durability',
         `Workflow "${w.name}" has no explicit timeout / fallback path.`,
-        'Add a "times out to" edge to a fallback or DLQ for long-running steps.',
+        'Add a "times out to" edge so long-running activities have a defined fallback (Temporal: StartToCloseTimeout).',
         w.id);
     }
-    if (!hasCompensate && outgoing.length >= 3) {
-      add('info', 'Resilience',
+    if (!hasCompensate && out.length >= 3) {
+      add('info', 'Durability',
         `Workflow "${w.name}" performs multiple steps with no compensation path.`,
-        'Add "compensates" edges so partial failures can roll back (saga pattern).',
+        'Add "compensates" edges so partial failures roll back (saga pattern — Temporal supports this natively with workflow.defer / SAGA helpers).',
         w.id);
     }
   });
 
-  // --- External dependencies ---------------------------------------------
   const externals = components.filter((c) => c.type === 'external');
   externals.forEach((ex) => {
-    const callers = connections.filter((e) => e.toId === ex.id);
+    const callers = connections.filter((e) => e.toId === ex.id && SYNC_KINDS.has(e.kind));
     if (callers.length > 0) {
-      const protectedByQueue = callers.some((e) => {
-        const from = byId.get(e.fromId);
-        return from && (from.type === 'queue' || from.type === 'topic' || from.type === 'consumer');
-      });
-      if (!protectedByQueue) {
-        add('info', 'Resilience',
-          `External system "${ex.name}" is called synchronously. A slow or down third party will cascade.`,
-          'Insulate with a queue/worker, retry with backoff, and apply a circuit breaker + timeout budget.',
+      const protectedByWorkflow = callers.some((e) => DURABLE_TYPES.has(typeOf(e.fromId)));
+      if (!protectedByWorkflow) {
+        add('warn', 'Durability',
+          `External system "${ex.name}" is called synchronously without a durable wrapper.`,
+          'Move the call into a Temporal activity with retries + circuit-breaker. The workflow stays alive even if the third party is down for hours.',
           ex.id);
       }
     }
   });
 
-  // --- Failover / DR ------------------------------------------------------
-  const hasFailover = connections.some((e) => e.kind === 'fails-over-to');
-  if (components.length >= 6 && !hasFailover) {
-    add('info', 'Disaster recovery',
-      'No failover edges are defined.',
-      'Identify your DR plan: which components fail over to where, and what the RTO/RPO is?');
-  }
-
-  // --- Load balancer with single target ----------------------------------
-  components.filter((c) => c.type === 'loadbalancer').forEach((lb) => {
-    const targets = connections.filter((e) => e.fromId === lb.id);
-    if (targets.length <= 1) {
-      add('warn', 'Availability',
-        `Load balancer "${lb.name}" has ${targets.length} downstream target(s). It's not actually load-balancing.`,
-        'Point the load balancer at ≥2 targets (or remove it from the diagram).',
-        lb.id);
-    }
-  });
-
-  // --- Score --------------------------------------------------------------
-  const weight = { error: 12, warn: 6, info: 2 };
+  // ---- Score (durability-only weighting) --------------------------------
+  const weight = { error: 14, warn: 7, info: 2 };
   const penalty = findings.reduce((s, f) => s + (weight[f.severity] || 0), 0);
   const score = Math.max(0, 100 - penalty);
   const grade =
@@ -932,11 +911,120 @@ export function assessResilience({ components, connections, allTypes }) {
     score >= 50 ? 'D' : 'F';
 
   let summary;
-  if (!findings.length) summary = 'No major resilience concerns detected.';
-  else summary = `${findings.length} finding${findings.length === 1 ? '' : 's'} across ${new Set(findings.map((f) => f.category)).size} categor${findings.length === 1 ? 'y' : 'ies'}.`;
+  if (candidates.length === 0 && findings.length === 0) {
+    summary = 'No orchestration risks detected — every multi-step flow is already durable.';
+  } else if (candidates.length === 0) {
+    summary = `${findings.length} durability gap${findings.length === 1 ? '' : 's'} to address.`;
+  } else {
+    summary = `${candidates.length} component${candidates.length === 1 ? '' : 's'} should be wrapped in a Temporal workflow.`;
+  }
 
-  return { findings, score, grade, summary };
+  return { candidates, findings, score, grade, summary };
 }
+
+// Backwards-compat alias (kept exported so older imports keep working).
+export const assessResilience = analyzeOrchestration;
+
+// ---- Temporal redesign generator (pure) --------------------------------
+// Given an architecture and a set of orchestration candidates, return a
+// redesigned { components, connections } where each candidate's multi-step
+// synchronous flow is mediated by a Temporal workflow node. The original
+// "candidate → downstream" sync edges become "workflow → downstream"
+// activity-execution edges, and the candidate now "starts" the workflow.
+export function generateTemporalRedesign({ components, connections, candidates, allTypes }) {
+  if (!candidates || !candidates.length) {
+    return { components: components.slice(), connections: connections.slice() };
+  }
+  const types = allTypes || DEFAULT_TYPES;
+  const groupOf = (typeKey) => types[typeKey]?.group || '';
+  const typeOf  = (cid, comps) => comps.find((c) => c.id === cid)?.type || '';
+
+  // Clone everything so we never mutate the caller's state.
+  const newComponents = JSON.parse(JSON.stringify(components));
+  let newConnections   = JSON.parse(JSON.stringify(connections));
+
+  // Stable id generator for inserted nodes (avoid colliding with existing ones).
+  let seq = Math.max(0, ...newComponents.map((c) => {
+    const m = /^c(\d+)$/.exec(c.id || '');
+    return m ? parseInt(m[1], 10) : 0;
+  }));
+  const mintId = () => `c${++seq}`;
+
+  candidates.forEach((cand) => {
+    const owner = newComponents.find((c) => c.id === cand.id);
+    if (!owner) return;
+
+    // Insert a Temporal workflow node for this candidate.
+    const wfId = mintId();
+    newComponents.push({
+      id: wfId,
+      type: 'workflow',
+      name: `${owner.name} Workflow`,
+      notes: 'Temporal — durable execution',
+      icon: '🧭',
+      color: '#047857'
+    });
+
+    // Add a DLQ + timer once per redesign (shared) if not present.
+    // (Keep the redesign lean — only insert what each candidate needs.)
+    // Rewire: for every sync edge from the owner to a non-trivial target,
+    // (a) drop the original sync edge,
+    // (b) add owner → workflow ("starts"),
+    // (c) add workflow → target ("orchestrates" — durable activity execution).
+    const ownerSyncEdges = newConnections.filter((e) =>
+      e.fromId === owner.id
+      && SYNC_KINDS.has(e.kind)
+      && NON_TRIVIAL_GROUPS.has(groupOf(typeOf(e.toId, newComponents)))
+      && !DURABLE_TYPES.has(typeOf(e.toId, newComponents))
+    );
+    if (ownerSyncEdges.length === 0) return;
+
+    // Drop the originals.
+    const dropIds = new Set(ownerSyncEdges.map((e) => e.id));
+    newConnections = newConnections.filter((e) => !dropIds.has(e.id));
+
+    // Owner → workflow (single "starts" edge).
+    newConnections.push({
+      id: mintId(),
+      fromId: owner.id,
+      toId: wfId,
+      kind: 'triggers',
+      label: 'starts workflow',
+      note: 'Durable handoff — owner returns immediately'
+    });
+
+    // Workflow → each downstream (orchestrated activity).
+    ownerSyncEdges.forEach((orig) => {
+      newConnections.push({
+        id: mintId(),
+        fromId: wfId,
+        toId: orig.toId,
+        kind: 'orchestrates',
+        label: orig.label || 'executes activity',
+        note: 'Retried with backoff · idempotent · timeout enforced'
+      });
+    });
+
+    // If the candidate calls an external system synchronously, also add a
+    // compensation path placeholder so the user sees the saga pattern.
+    const externalDownstream = ownerSyncEdges.find((e) =>
+      EXTERNAL_TYPES.has(typeOf(e.toId, newComponents))
+    );
+    if (externalDownstream) {
+      newConnections.push({
+        id: mintId(),
+        fromId: wfId,
+        toId: externalDownstream.toId,
+        kind: 'compensates',
+        label: 'rollback on failure',
+        note: 'Saga compensation — undoes the external side-effect'
+      });
+    }
+  });
+
+  return { components: newComponents, connections: newConnections };
+}
+
 
 // ---- The hook -----------------------------------------------------------
 export function useBuilder() {
@@ -1439,10 +1527,28 @@ export function useBuilder() {
     [components, connections]
   );
 
-  const assessment = useMemo(
-    () => assessResilience({ components, connections, allTypes }),
+  const orchestration = useMemo(
+    () => analyzeOrchestration({ components, connections, allTypes }),
     [components, connections, allTypes]
   );
+  // Backwards-compat: keep `assessment` exported under both names.
+  const assessment = orchestration;
+
+  const applyTemporalRedesign = useCallback(() => {
+    const cands = orchestration?.candidates || [];
+    if (!cands.length) return false;
+    // Capture today's design as the baseline so the diff tab tells the story.
+    const snapshot = {
+      title, components, connections, customTypes,
+      capturedAt: new Date().toISOString()
+    };
+    setBaseline(JSON.parse(JSON.stringify(snapshot)));
+    commit('temporal-redesign');
+    const next = generateTemporalRedesign({ components, connections, candidates: cands, allTypes });
+    setComponents(next.components);
+    setConnections(next.connections);
+    return true;
+  }, [orchestration, title, components, connections, customTypes, allTypes, commit]);
 
   // ---------- Multi-document workspace ----------
   const loadDocs = () => loadJson(DOCS_KEY) || [];
@@ -1545,7 +1651,8 @@ export function useBuilder() {
     // layout
     layoutDir, setLayoutDir, useSubgraphs, setUseSubgraphs,
     // derived
-    mermaid, mergedEdges, simulationSteps, lints, assessment,
+    mermaid, mergedEdges, simulationSteps, lints, assessment, orchestration,
+    applyTemporalRedesign,
     // maintenance
     reset, loadSample,
     // import/export
