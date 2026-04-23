@@ -1,18 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
+import DownloadMenu from './DownloadMenu.jsx';
+import { downloadBlob } from '../utils/diagramExport.js';
 
 let initialized = false;
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 export default function DiagramView({
   code,
@@ -410,39 +401,3 @@ export default function DiagramView({
   );
 }
 
-// Tiny accessible dropdown menu used by the diagram toolbar.
-function DownloadMenu({ label, actions, disabled }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDoc);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-  return (
-    <div className="download-menu" ref={ref}>
-      <button type="button" className="secondary-btn" onClick={() => setOpen((v) => !v)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}>
-        {label} ▾
-      </button>
-      {open && (
-        <div className="download-menu-popover" role="menu">
-          {actions.map((a) => (
-            <button
-              key={a.label}
-              type="button"
-              role="menuitem"
-              className="download-menu-item"
-              onClick={() => { setOpen(false); a.onClick(); }}
-            >{a.label}</button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}

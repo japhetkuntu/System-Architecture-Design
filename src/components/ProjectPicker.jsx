@@ -10,6 +10,7 @@ export default function ProjectPicker({
   createCloudProject,
   renameCloudProject,
   deleteCloudProject,
+  allowDeletePublished,
   onConfirm
 }) {
   const [projects, setProjects] = useState([]);
@@ -69,6 +70,10 @@ export default function ProjectPicker({
   };
 
   const remove = async (id, name) => {
+    if (!allowDeletePublished) {
+      setErr('Enable cloud deletion from the workspace panel before deleting projects.');
+      return;
+    }
     if (!onConfirm) return;
     onConfirm({
       title: `Delete project "${name}"?`,
@@ -163,8 +168,10 @@ export default function ProjectPicker({
                 <div className="ws-item-actions">
                   <button type="button" className="icon-btn" title="Rename"
                     onClick={() => { setRenamingId(p.id); setRenameValue(p.name); }}>✏️</button>
-                  <button type="button" className="icon-btn danger" title="Delete project"
-                    onClick={() => remove(p.id, p.name)}>×</button>
+                  <button type="button" className="icon-btn danger"
+                    title={allowDeletePublished ? 'Delete project' : 'Enable deletion in workspace settings'}
+                    onClick={() => remove(p.id, p.name)}
+                    disabled={!allowDeletePublished}>×</button>
                 </div>
               </li>
             ))}

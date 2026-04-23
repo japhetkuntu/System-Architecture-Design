@@ -105,6 +105,19 @@ export function detectFlows({ components, connections }) {
 
 /**
  * Build a Mermaid `sequenceDiagram` from a single flow.
+ *
+ * Standardizations applied (UML-style):
+ *   • `title` and `autonumber` for legibility.
+ *   • Participants declared up-front in first-seen order, with type labels.
+ *   • `Note over <entry>` opens the flow with a trigger description.
+ *   • Sync calls use `->>` and bracket the callee with `activate`/`deactivate`
+ *     so the lifeline shows execution bars (proper UML semantics).
+ *   • Async / fire-and-forget calls use `-->>` and get a side note marking
+ *     them as asynchronous (no activation — sender doesn't block).
+ *   • Consecutive calls from the same source to *different* targets are
+ *     wrapped in `par` / `and` blocks to convey fan-out in parallel.
+ *   • Self-calls render as a single `->>` with the standard self-loop.
+ *   • Closing `Note over <last>` marks the end of the flow.
  */
 export function buildSequenceMermaid(flow, { components, allTypes } = {}) {
   if (!flow || !flow.steps?.length) {
@@ -134,29 +147,94 @@ export function buildSequenceMermaid(flow, { components, allTypes } = {}) {
     const alias = aliasFor(id);
     const display = (c?.name || id).replace(/"/g, "'");
     const typeLabel = allTypes?.[c?.type]?.label || c?.type || '';
-    const fullDisplay = typeLabel ? `${display}<br/>${typeLabel}` : display;
-    participants.push(`  participant ${alias} as ${fullDisplay}`);
+    const labelText = typeLabel ? `${display} (${typeLabel})` : display;
+    // `actor` for human/external participants, `participant` for systems.
+    const t = String(c?.type || '').toLowerCase().replace(/\s|-/g, '');
+    const isActor = ['user', 'customer', 'admin', 'browser', 'mobile', 'phone', 'client'].includes(t);
+    participants.push(`  ${isActor ? 'actor' : 'participant'} ${alias} as "${labelText}"`);
   }
 
-  // Pre-add participants in first-seen order (entry first, then targets).
+  // Pre-declare participants in first-seen order (entry first, then targets).
   ensureParticipant(flow.entryId);
   flow.steps.forEach((s) => { ensureParticipant(s.fromId); ensureParticipant(s.toId); });
 
-  const lines = ['sequenceDiagram', '  autonumber', ...participants];
-  flow.steps.forEach((conn, i) => {
-    const fromAlias = aliasFor(conn.fromId);
-    const toAlias = aliasFor(conn.toId);
-    const rel = allTypes?.[conn.kind] || null;
-    const label = escSeqLabel(conn.label || rel?.label || conn.kind || 'calls');
-    // Choose arrow style by relationship arrow:
-    //   sync solid arrow  ──>  ->>
-    //   async dotted      ··>  -->>
-    const isAsync = (rel?.arrow || '').includes('-.');
-    const arrow = isAsync ? '-->>' : '->>';
-    lines.push(`  ${fromAlias}${arrow}${toAlias}: ${i + 1}. ${label}`);
-  });
+  const title = `Architecture flow: ${(flow.name || 'Main flow').replace(/"/g, "'")}`;
+  const lines = ['sequenceDiagram', `  title ${title}`, '  autonumber', ...participants];
+
+  // Opening note on the entry lifeline so management/readers immediately see
+  // who initiates this flow.
+  const entry = compById.get(flow.entryId);
+  if (entry) {
+    lines.push(`  Note over ${aliasFor(flow.entryId)}: Triggers "${(flow.name || 'flow').replace(/"/g, "'")}"`);
+  }
+
+  // Group consecutive fan-out (same source, different targets, all async-ish
+  // or independent) into par/and blocks for clearer parallelism.
+  const steps = flow.steps;
+  const activeStack = []; // alias names currently activated (for sync calls)
+  let i = 0;
+  while (i < steps.length) {
+    // Look ahead: does the next run share the same fromId AND have ≥2 distinct targets?
+    let j = i;
+    while (j < steps.length && steps[j].fromId === steps[i].fromId) j++;
+    const groupSize = j - i;
+    const distinctTargets = new Set(steps.slice(i, j).map((s) => s.toId));
+    const useParallel = groupSize >= 2 && distinctTargets.size >= 2;
+
+    if (useParallel) {
+      lines.push(`  par ${aliasFor(steps[i].fromId) ? compById.get(steps[i].fromId)?.name || 'caller' : 'caller'} fans out`);
+      for (let k = i; k < j; k++) {
+        if (k > i) lines.push('  and');
+        emitStep(steps[k], lines, aliasFor, allTypes, activeStack, '    ');
+      }
+      lines.push('  end');
+    } else {
+      for (let k = i; k < j; k++) {
+        emitStep(steps[k], lines, aliasFor, allTypes, activeStack, '  ');
+      }
+    }
+    i = j;
+  }
+
+  // Drain any remaining activations so the diagram is balanced.
+  while (activeStack.length) {
+    lines.push(`  deactivate ${activeStack.pop()}`);
+  }
+
+  // Closing marker on the lifeline of the last touched component.
+  const lastStep = steps[steps.length - 1];
+  if (lastStep) {
+    lines.push(`  Note over ${aliasFor(lastStep.toId)}: End of flow`);
+  }
 
   return lines.join('\n');
+}
+
+function emitStep(conn, lines, aliasFor, allTypes, activeStack, indent) {
+  const fromAlias = aliasFor(conn.fromId);
+  const toAlias = aliasFor(conn.toId);
+  const rel = allTypes?.[conn.kind] || null;
+  const label = escSeqLabel(conn.label || rel?.label || conn.kind || 'calls');
+  // Decide sync/async by relationship arrow style:
+  //   solid `-->`  → sync request (activates callee)
+  //   dotted `-.>` → async fire-and-forget (no activation)
+  const arrowDef = rel?.arrow || '';
+  const isAsync = arrowDef.includes('-.') ||
+    /async|publish|emit|enqueue|notify|fire|stream/i.test(label) ||
+    /async|publish|emit|enqueue|notify|fire|stream/i.test(rel?.label || '');
+  const arrow = isAsync ? '-->>' : '->>';
+  lines.push(`${indent}${fromAlias}${arrow}${toAlias}: ${label}`);
+  if (isAsync) {
+    lines.push(`${indent}Note right of ${toAlias}: async — no immediate response`);
+  } else {
+    lines.push(`${indent}activate ${toAlias}`);
+    activeStack.push(toAlias);
+    // We deactivate eagerly after each sync step to keep the diagram readable
+    // (Mermaid balances activations strictly). Real call-stack nesting would
+    // require explicit return semantics we don't model.
+    lines.push(`${indent}deactivate ${toAlias}`);
+    activeStack.pop();
+  }
 }
 
 /**

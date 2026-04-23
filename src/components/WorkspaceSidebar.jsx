@@ -32,6 +32,8 @@ export default function WorkspaceSidebar({
   createCloudProject,
   renameCloudProject,
   deleteCloudProject,
+  allowDeletePublished,
+  onToggleAllowDeletePublished,
   // Local-only docs
   docs,
   activeDocId,
@@ -137,6 +139,10 @@ export default function WorkspaceSidebar({
   };
 
   const askDeleteProject = (p) => {
+    if (!allowDeletePublished) {
+      onToast?.('Enable cloud deletion before removing published projects.');
+      return;
+    }
     onConfirm?.({
       title: `Delete project "${p.name}"?`,
       message: `All architectures inside "${p.name}" will be deleted from the cloud for everyone. This cannot be undone.`,
@@ -169,6 +175,10 @@ export default function WorkspaceSidebar({
   };
 
   const askDeleteArch = (a) => {
+    if (!allowDeletePublished) {
+      onToast?.('Enable cloud deletion before removing published architectures.');
+      return;
+    }
     onConfirm?.({
       title: `Delete "${a.title || 'Untitled'}"?`,
       message: 'This removes the cloud copy for everyone. Your local working copy is not affected.',
@@ -256,6 +266,22 @@ export default function WorkspaceSidebar({
         )}
       </div>
 
+      {cloudEnabled && (
+        <div className="ws-delete-toggle">
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={allowDeletePublished}
+              onChange={onToggleAllowDeletePublished}
+            />
+            <span>Allow deleting published cloud projects and architectures</span>
+          </label>
+          <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+            Disabled by default to protect shared cloud files from accidental removal.
+          </p>
+        </div>
+      )}
+
       {err && <div className="banner banner-error" style={{ marginTop: 8 }}><span>⚠ {err}</span></div>}
 
       {/* ============================ CLOUD ============================ */}
@@ -318,8 +344,10 @@ export default function WorkspaceSidebar({
                         disabled={!hasContent || busy === 'save-here'}>＋</button>
                       <button type="button" className="icon-btn" title="Rename project"
                         onClick={() => { setRenamingProjId(p.id); setRenameProjValue(p.name); }}>✏️</button>
-                      <button type="button" className="icon-btn danger" title="Delete project"
-                        onClick={() => askDeleteProject(p)}>×</button>
+                      <button type="button" className="icon-btn danger"
+                        title={allowDeletePublished ? 'Delete project' : 'Enable deletion in workspace settings'}
+                        onClick={() => askDeleteProject(p)}
+                        disabled={!allowDeletePublished}>×</button>
                     </div>
                   </div>
                   {isExp && (
@@ -339,6 +367,7 @@ export default function WorkspaceSidebar({
                           isCurrent={a.id === cloudId}
                           busy={busy}
                           projects={projects}
+                          allowDeletePublished={allowDeletePublished}
                           onOpen={() => openArch(a)}
                           onMove={(pid) => moveArch(a, pid)}
                           onCopyLink={() => copyLink(a.id)}
@@ -448,7 +477,7 @@ export default function WorkspaceSidebar({
   );
 }
 
-function ArchRow({ arch, isCurrent, busy, projects, onOpen, onMove, onCopyLink, onDelete }) {
+function ArchRow({ arch, isCurrent, busy, projects, allowDeletePublished, onOpen, onMove, onCopyLink, onDelete }) {
   const [showMove, setShowMove] = useState(false);
   return (
     <li className={`ws-arch-row ${isCurrent ? 'current' : ''}`}>
@@ -481,8 +510,10 @@ function ArchRow({ arch, isCurrent, busy, projects, onOpen, onMove, onCopyLink, 
         )}
         <button type="button" className="icon-btn" title="Copy share link"
           onClick={onCopyLink}>🔗</button>
-        <button type="button" className="icon-btn danger" title="Delete from cloud"
-          onClick={onDelete} disabled={busy === `move-${arch.id}`}>×</button>
+        <button type="button" className="icon-btn danger"
+          title={allowDeletePublished ? 'Delete from cloud' : 'Enable deletion in workspace settings'}
+          onClick={onDelete}
+          disabled={!allowDeletePublished || busy === `move-${arch.id}`}>×</button>
       </div>
     </li>
   );

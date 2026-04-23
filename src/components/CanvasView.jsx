@@ -6,7 +6,6 @@ import ReactFlow, {
   Position,
   ReactFlowProvider,
   useReactFlow,
-  reconnectEdge,
   MarkerType,
   BaseEdge,
   EdgeLabelRenderer,
@@ -80,6 +79,8 @@ function CanvasInner({
   const wrapperRef = useRef(null);
   const { screenToFlowPosition } = useReactFlow();
   const [prompt, setPrompt] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [reassignConfig, setReassignConfig] = useState(null);
 
   const nodeTypes = useMemo(() => ({ component: ComponentNode }), []);
   const edgeTypes = useMemo(() => ({ multilabel: MultiLabelEdge }), []);
@@ -127,6 +128,60 @@ function CanvasInner({
     onRemoveConnection?.(connId);
   }, [onRemoveConnection]);
 
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const openNodeContextMenu = useCallback((event, node) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ type: 'node', id: node.id, x: event.clientX, y: event.clientY, label: node.data.label });
+  }, []);
+  const openEdgeContextMenu = useCallback((event, edge) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ type: 'edge', id: edge.id, x: event.clientX, y: event.clientY, data: edge.data });
+  }, []);
+  const onPaneContextMenu = useCallback((event) => {
+    event.preventDefault();
+    closeContextMenu();
+  }, [closeContextMenu]);
+
+  const deleteNode = useCallback((id) => {
+    closeContextMenu();
+    onRemoveComponent?.(id);
+  }, [closeContextMenu, onRemoveComponent]);
+
+  const deleteEdgeGroup = useCallback((edgeData) => {
+    closeContextMenu();
+    if (!edgeData?.items?.length) return;
+    edgeData.items.forEach((item) => onRemoveConnection?.(item.connId));
+  }, [closeContextMenu, onRemoveConnection]);
+
+  const startReassignEdge = useCallback((field, edgeData) => {
+    closeContextMenu();
+    if (!edgeData?.items?.length) return;
+    const connId = edgeData.items[0].connId;
+    const conn = connections.find((c) => c.id === connId);
+    if (!conn) return;
+    setReassignConfig({ connId, field, selectedId: conn[field] });
+  }, [closeContextMenu, connections]);
+
+  const reassignCandidates = useMemo(() => {
+    if (!reassignConfig) return [];
+    const conn = connections.find((c) => c.id === reassignConfig.connId);
+    if (!conn) return [];
+    const otherField = reassignConfig.field === 'fromId' ? 'toId' : 'fromId';
+    return components.filter((c) => c.id !== conn[otherField]);
+  }, [components, connections, reassignConfig]);
+
+  const submitReassign = useCallback(() => {
+    if (!reassignConfig?.selectedId) return;
+    const conn = connections.find((c) => c.id === reassignConfig.connId);
+    if (!conn) return;
+    const otherField = reassignConfig.field === 'fromId' ? 'toId' : 'fromId';
+    if (conn[otherField] === reassignConfig.selectedId) return;
+    onUpdateConnection?.(reassignConfig.connId, { [reassignConfig.field]: reassignConfig.selectedId });
+    setReassignConfig(null);
+  }, [connections, onUpdateConnection, reassignConfig]);
+
   const nodes = useMemo(() => {
     const activeFrom = highlightStep?.fromId;
     const activeTo = highlightStep?.toId;
@@ -157,6 +212,7 @@ function CanvasInner({
   // the same node-pair render as a single visual edge with stacked label
   // badges — dramatically cuts down on overlapping lines and lets each
   // label keep its own simulation step number.
+  const edgeItemsById = useRef(new Map());
   const edges = useMemo(() => {
     const groups = new Map();
     const order = [];
@@ -176,12 +232,17 @@ function CanvasInner({
         active: highlightStep?.connId === e.id
       });
     });
-    return order.map((key) => {
+    // Refresh the lookup so `onReconnect` / `onEdgesChange` can map a
+    // grouped edge id back to the raw connections it represents.
+    const lookup = new Map();
+    const built = order.map((key) => {
       const g = groups.get(key);
       const anyActive = g.items.some((i) => i.active);
       const dominantColor = (g.items.find((i) => i.active) || g.items[0]).color;
+      const edgeId = `pair_${key}`;
+      lookup.set(edgeId, g.items);
       return {
-        id: `pair_${key}`,
+        id: edgeId,
         source: g.fromId,
         target: g.toId,
         type: 'multilabel',
@@ -206,6 +267,8 @@ function CanvasInner({
         }
       };
     });
+    edgeItemsById.current = lookup;
+    return built;
   }, [connections, highlightStep, editStep, removeStep]);
 
   const onNodesChange = useCallback((changes) => {
@@ -224,7 +287,12 @@ function CanvasInner({
 
   const onEdgesChange = useCallback((changes) => {
     changes.forEach((ch) => {
-      if (ch.type === 'remove') onRemoveConnection(ch.id);
+      if (ch.type === 'remove') {
+        // ch.id is a *grouped* edge id (`pair_<from>=><to>`). Resolve it
+        // back to the underlying raw connections and delete each.
+        const items = edgeItemsById.current.get(ch.id);
+        if (items?.length) items.forEach((it) => onRemoveConnection(it.connId));
+      }
     });
   }, [onRemoveConnection]);
 
@@ -239,20 +307,39 @@ function CanvasInner({
   }, [onAddConnection]);
 
   // Edge reconnection — lets the user drag either end of an existing edge
-  // to a different node. We patch the underlying connection in the model.
+  // to a different node. Because edges are visually grouped by node-pair,
+  // `oldEdge.id` is the group id (`pair_<from>=><to>`), so we resolve it
+  // back to the raw underlying connections and patch each of them.
   const reconnectDone = useRef(true);
   const onReconnectStart = useCallback(() => { reconnectDone.current = false; }, []);
   const onReconnect = useCallback((oldEdge, newConn) => {
     reconnectDone.current = true;
     if (!newConn.source || !newConn.target) return;
-    if (onUpdateConnection) {
-      onUpdateConnection(oldEdge.id, { fromId: newConn.source, toId: newConn.target });
-    }
+    if (!onUpdateConnection) return;
+    const items = edgeItemsById.current.get(oldEdge.id) || [];
+    if (!items.length) return;
+    // Determine which endpoint actually changed so we only patch that field
+    // (preserves the other endpoint exactly as the user had it).
+    const sourceChanged = newConn.source !== oldEdge.source;
+    const targetChanged = newConn.target !== oldEdge.target;
+    items.forEach((it) => {
+      const patch = {};
+      if (sourceChanged) patch.fromId = newConn.source;
+      if (targetChanged) patch.toId = newConn.target;
+      // If neither flag is set (very unusual), reassign both to be safe.
+      if (!sourceChanged && !targetChanged) {
+        patch.fromId = newConn.source;
+        patch.toId = newConn.target;
+      }
+      onUpdateConnection(it.connId, patch);
+    });
   }, [onUpdateConnection]);
   const onReconnectEnd = useCallback((_evt, edge) => {
-    // If the user dropped the edge end into empty space, treat that as a delete.
+    // If the user dropped the edge end into empty space, treat that as a
+    // delete of every raw connection in the group.
     if (!reconnectDone.current) {
-      onRemoveConnection(edge.id);
+      const items = edgeItemsById.current.get(edge.id) || [];
+      items.forEach((it) => onRemoveConnection(it.connId));
     }
     reconnectDone.current = true;
   }, [onRemoveConnection]);
@@ -325,7 +412,7 @@ function CanvasInner({
           onClick={onResetPositions}
           disabled={components.length === 0}
           title="Forget custom positions and re-grid">↻ Reset layout</button>
-        <span className="canvas-toolbar-hint muted">Drag tiles → drop here. Drag from a node's edge to connect. Double-click a node name or edge label to rename.</span>
+        <span className="canvas-toolbar-hint muted">Drag tiles → drop here. Drag from a node's edge to connect. Drag a link's endpoint onto another node to reassign it. Double-click a node name or edge label to rename.</span>
       </div>
       <ReactFlow
         nodes={nodes}
@@ -339,13 +426,15 @@ function CanvasInner({
         onReconnectStart={onReconnectStart}
         onReconnectEnd={onReconnectEnd}
         onNodeClick={onNodeClick}
+        onNodeContextMenu={openNodeContextMenu}
         onEdgeClick={onEdgeClick}
+        onEdgeContextMenu={openEdgeContextMenu}
+        onPaneContextMenu={onPaneContextMenu}
         onEdgeDoubleClick={onEdgeDoubleClick}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{ type: 'multilabel', reconnectable: true }}
-        edgesReconnectable
         edgesFocusable
         elementsSelectable
         deleteKeyCode={['Backspace', 'Delete']}
@@ -359,6 +448,50 @@ function CanvasInner({
           <div className="canvas-empty-card">
             <h3>Drop components here</h3>
             <p>Drag any tile from the palette on the left onto this canvas, then drag from a node's right edge to another node to connect them.</p>
+          </div>
+        </div>
+      )}
+      {contextMenu && (
+        <div className="canvas-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          {contextMenu.type === 'node' && (
+            <>
+              <button type="button" onClick={() => deleteNode(contextMenu.id)}>Delete component</button>
+              <button type="button" disabled title="Drag the node to reposition it">Move component</button>
+            </>
+          )}
+          {contextMenu.type === 'edge' && (
+            <>
+              <button type="button" onClick={() => deleteEdgeGroup(contextMenu.data)}>Delete link group</button>
+              <button type="button" onClick={() => startReassignEdge('fromId', contextMenu.data)}>Reassign source…</button>
+              <button type="button" onClick={() => startReassignEdge('toId', contextMenu.data)}>Reassign target…</button>
+              <button type="button" disabled title="Tip: just grab the link's endpoint and drop it on another node">Tip: drag an endpoint to reassign</button>
+            </>
+          )}
+        </div>
+      )}
+      {reassignConfig && (
+        <div className="modal-backdrop" onClick={() => setReassignConfig(null)}>
+          <div className="modal modal-sm" role="dialog" aria-modal="true" aria-label="Reassign connection" onClick={(e) => e.stopPropagation()}>
+            <header className="modal-head">
+              <h2>Reassign connection</h2>
+            </header>
+            <div className="modal-body">
+              <p>Select a new {reassignConfig.field === 'fromId' ? 'source' : 'target'} component for this connection.</p>
+              <select
+                autoFocus
+                value={reassignConfig.selectedId}
+                onChange={(e) => setReassignConfig((prev) => prev ? { ...prev, selectedId: e.target.value } : prev)}
+                style={{ width: '100%', minWidth: 180, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)' }}
+              >
+                {reassignCandidates.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name || c.id}</option>
+                ))}
+              </select>
+            </div>
+            <footer className="modal-foot">
+              <button type="button" className="link-btn" onClick={() => setReassignConfig(null)}>Cancel</button>
+              <button type="button" className="primary-btn small" onClick={submitReassign}>Save</button>
+            </footer>
           </div>
         </div>
       )}

@@ -12,6 +12,7 @@ export default function CloudGallery({
   deleteCloudArchitecture,
   moveCloudArchitectureToProject,
   listCloudProjects,
+  allowDeletePublished,
   onOpenProjects,
   onLoaded,
   onConfirm
@@ -60,6 +61,10 @@ export default function CloudGallery({
   };
 
   const handleDelete = async (id, title) => {
+    if (!allowDeletePublished) {
+      setErr('Enable cloud deletion from the workspace panel before deleting published files.');
+      return;
+    }
     if (!onConfirm) return;
     onConfirm({
       title: `Delete "${title || 'Untitled'}"?`,
@@ -119,6 +124,9 @@ export default function CloudGallery({
             </div>
           )}
           {err && <div className="banner banner-error"><span>⚠ {err}</span></div>}
+          {!allowDeletePublished && cloudEnabled && (
+            <div className="banner banner-warning"><span>Deleting published cloud files is disabled. Enable it from the Workspace panel to remove files.</span></div>
+          )}
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
             <div className="btn-group">
@@ -180,8 +188,10 @@ export default function CloudGallery({
                     </select>
                     <button type="button" className="icon-btn" title="Copy share link"
                       onClick={() => copyLink(it.id)}>🔗</button>
-                    <button type="button" className="icon-btn danger" title="Delete from cloud"
-                      onClick={() => handleDelete(it.id, it.title)} disabled={busyId === it.id}>×</button>
+                    <button type="button" className="icon-btn danger"
+                      title={allowDeletePublished ? 'Delete from cloud' : 'Enable deletion in workspace settings'}
+                      onClick={() => handleDelete(it.id, it.title)}
+                      disabled={!allowDeletePublished || busyId === it.id}>×</button>
                   </div>
                 </li>
               ))}

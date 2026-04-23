@@ -72,12 +72,20 @@ describe('buildSequenceMermaid', () => {
     const code = buildSequenceMermaid(flow, { components, allTypes });
     expect(code).toMatch(/^sequenceDiagram/);
     expect(code).toContain('autonumber');
+    // user-type entry renders as `actor`, others as `participant`
+    expect(code).toContain('actor');
     expect(code).toContain('participant');
     expect(code).toContain('->>');
-    expect(code).toContain('1. login');
+    expect(code).toContain('login');
+    // sync calls now bracket the callee with activate/deactivate
+    expect(code).toMatch(/activate /);
+    expect(code).toMatch(/deactivate /);
+    // opening and closing notes frame the flow
+    expect(code).toMatch(/Note over .*: Triggers/);
+    expect(code).toMatch(/Note over .*: End of flow/);
   });
 
-  it('uses async arrow for dotted-arrow relationships', () => {
+  it('uses async arrow for dotted-arrow relationships and tags them as async', () => {
     const components = [
       { id: 'a', name: 'A' }, { id: 'b', name: 'B' }
     ];
@@ -90,6 +98,28 @@ describe('buildSequenceMermaid', () => {
       allTypes: { publishes: { label: 'publishes', arrow: '-.->' } }
     });
     expect(code).toContain('-->>');
+    expect(code).toMatch(/Note right of .*: async/);
+    // async messages must NOT be wrapped in activate/deactivate
+    expect(code).not.toMatch(/activate /);
+  });
+
+  it('wraps consecutive fan-out from the same source in a par/and block', () => {
+    const components = [
+      { id: 'g', name: 'Gateway' },
+      { id: 'a', name: 'Service A' },
+      { id: 'b', name: 'Service B' }
+    ];
+    const flow = {
+      id: 'f', entryId: 'g', name: 'Gateway',
+      steps: [
+        { id: 'c1', fromId: 'g', toId: 'a', kind: 'calls', label: 'lookup' },
+        { id: 'c2', fromId: 'g', toId: 'b', kind: 'calls', label: 'enrich' }
+      ]
+    };
+    const code = buildSequenceMermaid(flow, { components, allTypes: {} });
+    expect(code).toMatch(/\n\s*par /);
+    expect(code).toMatch(/\n\s*and\b/);
+    expect(code).toMatch(/\n\s*end\b/);
   });
 });
 

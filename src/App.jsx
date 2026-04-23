@@ -19,15 +19,37 @@ import ShareDialog from './components/ShareDialog.jsx';
 import CloudGallery from './components/CloudGallery.jsx';
 import ProjectPicker from './components/ProjectPicker.jsx';
 import LayoutControls from './components/LayoutControls.jsx';
+import DownloadMenu from './components/DownloadMenu.jsx';
+import ManagementOnlyView from './components/ManagementOnlyView.jsx';
+import {
+  exportDiagramAsSvg, exportDiagramAsPng, exportDiagramAsJpg,
+  exportDiagramAsPdf, exportMermaidSource
+} from './utils/diagramExport.js';
 import { buildAllSequenceDiagrams } from './utils/uml.js';
 
+// Detect a `?view=...` parameter on first load — used by the
+// management-only share route so leadership sees just the dashboard.
+function readViewMode() {
+  if (typeof window === 'undefined') return null;
+  const qs = new URLSearchParams(window.location.search);
+  const v = qs.get('view');
+  if (v) return v;
+  const hash = window.location.hash || '';
+  const match = hash.match(/[?&]view=([^&]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 const DISMISS_KEY = 'archivise:welcome-dismissed:v1';
+const DELETE_PUBLISHED_KEY = 'archivise:allow-published-delete:v1';
 
 export default function App() {
   const b = useBuilder();
   const [mode, setMode] = useState('build');
   const [currentStep, setCurrentStep] = useState(-1);
   const [importError, setImportError] = useState('');
+  const [allowCloudDelete, setAllowCloudDelete] = useState(() => {
+    try { return localStorage.getItem(DELETE_PUBLISHED_KEY) === '1'; } catch { return false; }
+  });
   const [toast, setToast] = useState('');
   const [adrOpen, setAdrOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -39,6 +61,7 @@ export default function App() {
   const [confirm, setConfirm] = useState(null);
   const [prompt, setPrompt] = useState(null);
   const [focusMode, setFocusMode] = useState(false);
+  const [viewMode] = useState(() => readViewMode()); // 'management' | null
   const [welcomeDismissed, setWelcomeDismissed] = useState(() => {
     try { return localStorage.getItem(DISMISS_KEY) === '1'; } catch { return false; }
   });
@@ -55,6 +78,15 @@ export default function App() {
     setToast(msg);
     setTimeout(() => setToast(''), 2400);
   }, []);
+
+  const toggleAllowCloudDelete = useCallback(() => {
+    setAllowCloudDelete((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(DELETE_PUBLISHED_KEY, next ? '1' : '0'); } catch { }
+      showToast(next ? 'Cloud deletion enabled' : 'Cloud deletion disabled');
+      return next;
+    });
+  }, [showToast]);
 
   const askPrompt = useCallback((cfg) => {
     setPrompt({
@@ -177,6 +209,27 @@ export default function App() {
     downloadBlob(new Blob([b.exportJson()], { type: 'application/json' }), `${filenameBase}.archivise.json`);
     showToast('Exported architecture JSON');
   };
+
+  // Run an async export, surface any error as a toast.
+  const runExport = useCallback(async (label, fn) => {
+    try {
+      await fn();
+      showToast(`Exported ${label}`);
+    } catch (e) {
+      showToast(`Export failed: ${e?.message || 'unknown error'}`);
+    }
+  }, [showToast]);
+
+  const downloadActions = useMemo(() => ([
+    { label: 'Architecture JSON',          onClick: downloadJson },
+    { label: 'Diagram — SVG (vector)',     onClick: () => runExport('SVG',  () => exportDiagramAsSvg(b.mermaid, filenameBase)) },
+    { label: 'Diagram — PNG (standard 2×)', onClick: () => runExport('PNG',  () => exportDiagramAsPng(b.mermaid, filenameBase, 2)) },
+    { label: 'Diagram — PNG (high-res 4×)',  onClick: () => runExport('PNG',  () => exportDiagramAsPng(b.mermaid, filenameBase, 4)) },
+    { label: 'Diagram — JPG',              onClick: () => runExport('JPG',  () => exportDiagramAsJpg(b.mermaid, filenameBase, 2)) },
+    { label: 'Diagram — PDF (print dialog)', onClick: () => runExport('PDF',  () => exportDiagramAsPdf(b.mermaid, b.title)) },
+    { label: 'Mermaid source (.mmd)',      onClick: () => runExport('Mermaid', () => exportMermaidSource(b.mermaid, filenameBase)) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ]), [b.mermaid, b.title, filenameBase, runExport]);
 
   const handleFile = async (file, asBaseline) => {
     setImportError('');
@@ -329,8 +382,61 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
+  // True browser Fullscreen API — requested whenever focus mode turns on.
+  // Fallref={appShellRef} s back gracefully (CSS-only fullscreen) when the API is unavailable
+  // or the user denies it.
+  const appShellRef = useRef(null);
+  useEffect(() => {
+    const el = appShellRef.current;
+    if (!el) return;
+    const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+    if (focusMode && !isFs()) {
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) {
+        try { Promise.resolve(req.call(el)).catch(() => {}); } catch { /* ignore */ }
+      }
+    } else if (!focusMode && isFs()) {
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (exit) {
+        try { Promise.resolve(exit.call(document)).catch(() => {}); } catch { /* ignore */ }
+      }
+    }
+  }, [focusMode]);
+
+  // Keep React state in sync if the user exits fullscreen via the Esc key
+  // or browser chrome (so our toolbar button label stays correct).
+  useEffect(() => {
+    const onChange = () => {
+      const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      if (!isFs && focusMode) setFocusMode(false);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, [focusMode]);
+
+  // Management-only route: render the stripped-down executive dashboard.
+  // We keep `useBuilder` running above so the share token / cloud id loads
+  // identically; we just hide the editor chrome.
+  if (viewMode === 'management') {
+    return (
+      <>
+        <ManagementOnlyView builder={b} filenameBase={filenameBase} />
+        {importError && (
+          <div className="banner banner-error" style={{ position: 'fixed', top: 12, left: 12, right: 12, zIndex: 50 }}>
+            <span>⚠ {importError}</span>
+            <button type="button" className="link-btn" onClick={() => setImportError('')}>Dismiss</button>
+          </div>
+        )}
+      </>
+    );
+  }
+
   return (
-    <div className={`app${focusMode ? ' app--focus' : ''}`}>
+    <div className={`app${focusMode ? ' app--focus' : ''}${focusMode && mode !== 'simulate' ? ' app--focus-only' : ''}`}>
       <header className="app-header">
         <div className="app-title">
           <h1>Archivise</h1>
@@ -369,8 +475,11 @@ export default function App() {
               title="Load a previously exported .archivise.json file">⬆ Import</button>
             <button type="button" className="secondary-btn" onClick={() => triggerImport(true)}
               title="Load an existing architecture as the baseline to compare against">⬆ As baseline</button>
-            <button type="button" className="secondary-btn" onClick={downloadJson}
-              title="Save your full architecture to a JSON file">⬇ JSON</button>
+            <DownloadMenu
+              label="⬇ Download"
+              disabled={b.components.length === 0}
+              actions={downloadActions}
+            />
             <button type="button" className="secondary-btn" onClick={() => setShareOpen(true)}
               disabled={b.components.length === 0}
               title="Get a shareable URL anyone can open in their browser (⌘/)">🔗 Share</button>
@@ -613,8 +722,11 @@ export default function App() {
         deleteCloudArchitecture={b.deleteCloudArchitecture}
         moveCloudArchitectureToProject={b.moveCloudArchitectureToProject}
         listCloudProjects={b.listCloudProjects}
+        allowDeletePublished={allowCloudDelete}
         onOpenProjects={() => { setCloudOpen(false); setProjectsOpen(true); }}
-        onLoaded={(id) => { setCloudOpen(false); clearSelection(); dismissWelcome(); showToast('Loaded from cloud'); }}        onConfirm={(cfg) => setConfirm(cfg)}      />
+        onLoaded={(id) => { setCloudOpen(false); clearSelection(); dismissWelcome(); showToast('Loaded from cloud'); }}
+        onConfirm={(cfg) => setConfirm(cfg)}
+      />
 
       <ProjectPicker
         open={projectsOpen}
@@ -626,6 +738,8 @@ export default function App() {
         createCloudProject={b.createCloudProject}
         renameCloudProject={b.renameCloudProject}
         deleteCloudProject={b.deleteCloudProject}
+        allowDeletePublished={allowCloudDelete}
+        onToggleAllowDeletePublished={toggleAllowCloudDelete}
         onConfirm={(cfg) => setConfirm(cfg)}
       />
 
@@ -645,6 +759,8 @@ export default function App() {
         createCloudProject={b.createCloudProject}
         renameCloudProject={b.renameCloudProject}
         deleteCloudProject={b.deleteCloudProject}
+        allowDeletePublished={allowCloudDelete}
+        onToggleAllowDeletePublished={toggleAllowCloudDelete}
         docs={b.docs}
         activeDocId={b.activeDocId}
         onLoadDoc={(id) => { b.loadDoc(id); clearSelection(); dismissWelcome(); showToast('Loaded'); }}
