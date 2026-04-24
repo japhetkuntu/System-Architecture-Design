@@ -1225,7 +1225,7 @@ export function useBuilder() {
       }
     }, 1200);
     return () => clearTimeout(handle);
-  }, [title, components, connections, customTypes, cloudId, activeProjectId]);
+  }, [title, components, connections, customTypes, scenarios, cloudId, activeProjectId]);
 
   const allTypes = useMemo(() => ({ ...DEFAULT_TYPES, ...customTypes }), [customTypes]);
 
@@ -1260,7 +1260,7 @@ export function useBuilder() {
     } finally {
       setCloudSaving(false);
     }
-  }, [title, components, connections, customTypes, cloudId, activeProjectId]);
+  }, [title, components, connections, customTypes, scenarios, cloudId, activeProjectId]);
 
   const detachFromCloud = useCallback(() => {
     setCloudId(null);
