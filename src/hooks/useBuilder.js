@@ -1101,6 +1101,7 @@ export function useBuilder() {
   const [components, setComponents] = useState(() => sanitized.components);
   const [connections, setConnections] = useState(() => sanitized.connections);
   const [customTypes, setCustomTypes] = useState(() => stored?.customTypes ?? {});
+  const [scenarios, setScenarios] = useState(() => Array.isArray(stored?.scenarios) ? stored.scenarios : []);
   const [title, setTitle] = useState(() => stored?.title ?? 'My Architecture');
   const [baseline, setBaseline] = useState(() => loadJson(BASELINE_KEY));
   const [cloudId, setCloudId] = useState(() => loadJson(CLOUD_KEY) || null);
@@ -1191,8 +1192,8 @@ export function useBuilder() {
 
   // Persist state + baseline
   useEffect(() => {
-    saveJson(STATE_KEY, { title, components, connections, customTypes, nextId });
-  }, [title, components, connections, customTypes]);
+    saveJson(STATE_KEY, { title, components, connections, customTypes, scenarios, nextId });
+  }, [title, components, connections, customTypes, scenarios]);
 
   useEffect(() => {
     if (baseline) saveJson(BASELINE_KEY, baseline);
@@ -1209,7 +1210,7 @@ export function useBuilder() {
   // user having to think about it.
   useEffect(() => {
     if (!supabaseConfigured || !cloudId) return;
-    const payload = { title, components, connections, customTypes, nextId };
+    const payload = { title, components, connections, customTypes, scenarios, nextId };
     const handle = setTimeout(async () => {
       setCloudSaving(true);
       setCloudError(null);
@@ -1238,13 +1239,14 @@ export function useBuilder() {
     setConnections(payload.connections || []);
     setCustomTypes(payload.customTypes || {});
     if (typeof payload.nextId === 'number' && payload.nextId > nextId) nextId = payload.nextId;
+    setScenarios(Array.isArray(payload.scenarios) ? payload.scenarios : []);
     setCloudId(record.id);
     if (record.project_id) setActiveProjectIdState(record.project_id);
     return record.id;
   }, [commit]);
 
   const saveCloudArchitecture = useCallback(async () => {
-    const payload = { title, components, connections, customTypes, nextId };
+    const payload = { title, components, connections, customTypes, scenarios, nextId };
     setCloudSaving(true);
     setCloudError(null);
     try {
@@ -1503,16 +1505,31 @@ export function useBuilder() {
     setComponents([]);
     setConnections([]);
     setCustomTypes({});
+    setScenarios([]);
     setTitle('My Architecture');
     setBaseline(null);
   }, [commit]);
 
+  // ---------- Scenarios (Scenario Lab) ----------
+  const addScenario = useCallback((scenario) => {
+    setScenarios((prev) => [...prev, scenario]);
+  }, []);
+  const updateScenario = useCallback((scenario) => {
+    setScenarios((prev) => prev.map((s) => s.id === scenario.id ? scenario : s));
+  }, []);
+  const removeScenario = useCallback((id) => {
+    setScenarios((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+  const setScenariosBulk = useCallback((next) => {
+    setScenarios(Array.isArray(next) ? next : []);
+  }, []);
+
   // ---------- Import / Export ----------
   const exportJson = useCallback(() => JSON.stringify({
     version: 1,
-    title, components, connections, customTypes, nextId,
+    title, components, connections, customTypes, scenarios, nextId,
     exportedAt: new Date().toISOString()
-  }, null, 2), [title, components, connections, customTypes]);
+  }, null, 2), [title, components, connections, customTypes, scenarios]);
 
   const importJson = useCallback((jsonText, { asBaseline = false } = {}) => {
     let data;
@@ -1532,6 +1549,7 @@ export function useBuilder() {
     setComponents(incoming.components);
     setConnections(incoming.connections);
     setCustomTypes(incoming.customTypes);
+    setScenarios(Array.isArray(data.scenarios) ? data.scenarios : []);
     if (typeof data.nextId === 'number' && data.nextId > nextId) nextId = data.nextId;
     if (asBaseline) {
       setBaseline({
@@ -1716,13 +1734,13 @@ export function useBuilder() {
       id,
       name: (name || title || 'Untitled').trim(),
       updatedAt: new Date().toISOString(),
-      state: { title, components, connections, customTypes },
+      state: { title, components, connections, customTypes, scenarios },
       baseline
     };
     persistDocs([...loadDocs(), doc]);
     persistActive(id);
     return id;
-  }, [title, components, connections, customTypes, baseline]);
+  }, [title, components, connections, customTypes, scenarios, baseline]);
 
   const saveActiveDoc = useCallback(() => {
     const list = loadDocs();
@@ -1733,12 +1751,12 @@ export function useBuilder() {
       ...list[idx],
       name: title || list[idx].name,
       updatedAt: new Date().toISOString(),
-      state: { title, components, connections, customTypes },
+      state: { title, components, connections, customTypes, scenarios },
       baseline
     };
     persistDocs(list);
     return activeDocId;
-  }, [activeDocId, title, components, connections, customTypes, baseline]);
+  }, [activeDocId, title, components, connections, customTypes, scenarios, baseline]);
 
   const loadDoc = useCallback((id) => {
     const list = loadDocs();
@@ -1749,6 +1767,7 @@ export function useBuilder() {
     setComponents(d.state.components);
     setConnections((d.state.connections || []).map((c) => ({ note: '', ...c })));
     setCustomTypes(d.state.customTypes || {});
+    setScenarios(Array.isArray(d.state.scenarios) ? d.state.scenarios : []);
     setBaseline(d.baseline || null);
     persistActive(id);
   }, [commit]);
@@ -1778,6 +1797,7 @@ export function useBuilder() {
     setComponents([]);
     setConnections([]);
     setCustomTypes({});
+    setScenarios([]);
     setTitle('My Architecture');
     setBaseline(null);
     persistActive(null);
@@ -1827,6 +1847,8 @@ export function useBuilder() {
     deleteCloudProject: deleteRemoteProject,
     moveCloudArchitectureToProject: moveRemoteArchitectureToProject,
     // workspaces
-    docs, activeDocId, saveAsDoc, saveActiveDoc, loadDoc, renameDoc, duplicateDoc, deleteDoc, newDoc
+    docs, activeDocId, saveAsDoc, saveActiveDoc, loadDoc, renameDoc, duplicateDoc, deleteDoc, newDoc,
+    // scenario lab
+    scenarios, addScenario, updateScenario, removeScenario, setScenarios: setScenariosBulk
   };
 }

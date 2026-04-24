@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import { generateAdrMarkdown } from '../utils/adr.js';
 import { buildHtmlBundle } from '../utils/htmlBundle.js';
+import { detectFlows } from '../utils/uml.js';
+import { analyseFlow, runScenario } from '../utils/scenarioSimulator.js';
+import { buildRisks, summariseRisks } from '../utils/managementInsights.js';
 
 // --- Tiny Markdown renderer for ADR preview ---------------------------------
 function escapeHtml(s) {
@@ -105,6 +108,8 @@ export default function AdrDialog({
   baseline, current, diff, allTypes,
   mermaid: mermaidCode, baselineMermaid, diffMermaid,
   sequences = [],
+  connections = [],
+  scenarios = [],
   filenameBase
 }) {
   const [number, setNumber] = useState('');
@@ -121,7 +126,9 @@ export default function AdrDialog({
   // Section toggles — every major block can be turned off.
   const [sections, setSections] = useState({
     context: true, decision: true, consequences: true,
-    diagrams: true, alternatives: true, related: true, reviewers: true
+    diagrams: true, alternatives: true, related: true, reviewers: true,
+    // Phase B sections default ON when relevant data exists
+    orchestration: true, risks: true, scenarios: true
   });
   const toggleSection = (key) => setSections((s) => ({ ...s, [key]: !s[key] }));
 
@@ -173,6 +180,27 @@ export default function AdrDialog({
     [availableDiagrams, excludedDiagrams]
   );
 
+  // -------- Phase B intelligence: orchestration, risks, scenario results --------
+  const flowInsights = useMemo(() => {
+    if (!current?.components?.length) return [];
+    const flows = detectFlows({ components: current.components, connections });
+    return flows.map((f) => analyseFlow(f, { components: current.components, connections, allTypes })).filter(Boolean);
+  }, [current, connections, allTypes]);
+
+  const risksData = useMemo(() => {
+    if (!current?.components?.length) return null;
+    const items = buildRisks({ components: current.components, connections, allTypes });
+    return { items, summary: summariseRisks(items) };
+  }, [current, connections, allTypes]);
+
+  const scenarioResultsData = useMemo(() => {
+    if (!Array.isArray(scenarios) || !scenarios.length || !current?.components?.length) return [];
+    return scenarios.map((scenario) => ({
+      scenario,
+      result: runScenario(scenario, { components: current.components, connections, allTypes })
+    }));
+  }, [scenarios, current, connections, allTypes]);
+
   const md = useMemo(() => {
     if (!open) return '';
     return generateAdrMarkdown({
@@ -184,9 +212,12 @@ export default function AdrDialog({
       alternatives, relatedAdrs, reviewers,
       sections,
       diagrams: includedDiagrams,
-      customSections
+      customSections,
+      flowInsights: sections.orchestration ? flowInsights : null,
+      risks: sections.risks ? risksData : null,
+      scenarioResults: sections.scenarios ? scenarioResultsData : null
     });
-  }, [open, number, status, author, titleOverride, current, baseline, diff, allTypes, mermaidCode, baselineMermaid, diffMermaid, alternatives, relatedAdrs, reviewers, sections, includedDiagrams, customSections]);
+  }, [open, number, status, author, titleOverride, current, baseline, diff, allTypes, mermaidCode, baselineMermaid, diffMermaid, alternatives, relatedAdrs, reviewers, sections, includedDiagrams, customSections, flowInsights, risksData, scenarioResultsData]);
 
   const rendered = useMemo(
     () => open ? markdownToHtml(md, { mermaidEnabled: previewMode === 'rendered' }) : { html: '', blocks: [] },
@@ -331,6 +362,9 @@ export default function AdrDialog({
                   ['decision', 'Decision'],
                   ['consequences', 'Consequences'],
                   ['diagrams', 'Diagrams'],
+                  ['orchestration', `Orchestration (${flowInsights.length})`],
+                  ['risks', `Risks (${risksData?.items?.length || 0})`],
+                  ['scenarios', `Scenario tests (${scenarioResultsData.length})`],
                   ['alternatives', 'Alternatives'],
                   ['related', 'Related ADRs'],
                   ['reviewers', 'Reviewers']

@@ -5,6 +5,8 @@ import {
   estimateStepMs, recoveryMinutesFor, formatRecovery,
   buildRisks, summariseRisks, buildScenarios
 } from '../utils/managementInsights.js';
+import { detectFlows } from '../utils/uml.js';
+import { analyseFlow } from '../utils/scenarioSimulator.js';
 
 /**
  * StoryView — the executive dashboard.
@@ -66,7 +68,7 @@ export default function StoryView({ title, flows, components, connections, allTy
 
       <div className="mgmt-tab-panel">
         {tab === 'journey' && (
-          <JourneyTab flows={flows} components={components} allTypes={allTypes} compById={compById} onPick={openDrawer} />
+          <JourneyTab flows={flows} components={components} connections={connections || []} allTypes={allTypes} compById={compById} onPick={openDrawer} />
         )}
         {tab === 'capabilities' && (
           <CapabilitiesTab components={components} allTypes={allTypes} degrees={degrees} onPick={openDrawer} />
@@ -94,7 +96,7 @@ export default function StoryView({ title, flows, components, connections, allTy
 // ============================================================================
 // Tab 1 — Journey Simulator
 // ============================================================================
-function JourneyTab({ flows, components, allTypes, compById, onPick }) {
+function JourneyTab({ flows, components, connections, allTypes, compById, onPick }) {
   const safeFlows = flows || [];
   const [activeFlowId, setActiveFlowId] = useState(safeFlows[0]?.id || null);
   useEffect(() => {
@@ -105,6 +107,21 @@ function JourneyTab({ flows, components, allTypes, compById, onPick }) {
   }, [safeFlows, activeFlowId]);
 
   const flow = safeFlows.find((f) => f.id === activeFlowId);
+
+  // Re-derive raw flow steps so we can run orchestration analysis without
+  // having to re-parse mermaid. detectFlows is cheap and pure.
+  const rawFlows = useMemo(
+    () => detectFlows({ components, connections }),
+    [components, connections]
+  );
+  const rawFlow = useMemo(
+    () => rawFlows.find((f) => f.id === activeFlowId) || null,
+    [rawFlows, activeFlowId]
+  );
+  const insights = useMemo(
+    () => rawFlow ? analyseFlow(rawFlow, { components, connections, allTypes }) : null,
+    [rawFlow, components, connections, allTypes]
+  );
 
   // Reconstruct the steps in plain-English form. We need original step
   // metadata, which `flows` (sequenceDiagrams) doesn't carry — so we
@@ -147,7 +164,61 @@ function JourneyTab({ flows, components, allTypes, compById, onPick }) {
           onPick={onPick}
         />
       )}
+      {flow && insights && <OrchestrationInsights insights={insights} />}
     </section>
+  );
+}
+
+function OrchestrationInsights({ insights }) {
+  return (
+    <details className="orch-insights" open>
+      <summary>
+        <span className="orch-insights-title">🧠 Orchestration insights</span>
+        <span className="muted">Critical-path latency, fan-out, sync/async balance, and recommendations.</span>
+      </summary>
+      <div className="orch-insights-grid">
+        <div className="orch-stat">
+          <span className="orch-stat-label">Estimated latency</span>
+          <span className="orch-stat-value">~{insights.estimatedLatencyMs}ms</span>
+        </div>
+        <div className="orch-stat">
+          <span className="orch-stat-label">Slowest hop</span>
+          <span className="orch-stat-value">{insights.slowest ? `${insights.slowest.name} (~${insights.slowest.ms}ms)` : '—'}</span>
+        </div>
+        <div className="orch-stat">
+          <span className="orch-stat-label">Sync · Async</span>
+          <span className="orch-stat-value">{insights.syncCount} · {insights.asyncCount}</span>
+        </div>
+        <div className="orch-stat">
+          <span className="orch-stat-label">Components in path</span>
+          <span className="orch-stat-value">{insights.componentCount}</span>
+        </div>
+        <div className="orch-stat">
+          <span className="orch-stat-label">External dependencies</span>
+          <span className="orch-stat-value">{insights.externalCount}</span>
+        </div>
+        <div className="orch-stat">
+          <span className="orch-stat-label">Fan-out points</span>
+          <span className="orch-stat-value">{insights.fanOuts.length}</span>
+        </div>
+      </div>
+      {insights.fanOuts.length > 0 && (
+        <div className="orch-fanout">
+          <strong>Parallel branches:</strong>
+          <ul>
+            {insights.fanOuts.map((f, i) => (
+              <li key={i}><strong>{f.fromName}</strong> fans out to {f.targets.join(', ')}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div className="orch-recs">
+        <strong>Recommendations</strong>
+        <ul>
+          {insights.recommendations.map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
+      </div>
+    </details>
   );
 }
 

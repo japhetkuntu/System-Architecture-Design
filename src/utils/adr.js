@@ -163,7 +163,15 @@ export function generateAdrMarkdown({
   //   built-in sections, before the footer.
   sections = {},
   diagrams = null,
-  customSections = []
+  customSections = [],
+  // NEW (Phase B intelligence):
+  // - flowInsights: array of analyseFlow() outputs to render under "Orchestration".
+  // - risks: { items: buildRisks(...), summary: summariseRisks(...) } to render under "Risks".
+  // - scenarioResults: array of { scenario, result } pairs from runScenario to render
+  //   under "Scenario test results".
+  flowInsights = null,
+  risks = null,
+  scenarioResults = null
 }) {
   const want = (key, fallback = true) => (sections[key] === undefined ? fallback : !!sections[key]);
   const today = new Date().toISOString().slice(0, 10);
@@ -384,6 +392,75 @@ export function generateAdrMarkdown({
       out.push(`- [ ] ${line}`);
     });
     out.push('');
+  }
+
+  // ----- Phase B intelligence sections (all optional) -----
+
+  // Orchestration insights per detected flow
+  if (want('orchestration', false) && Array.isArray(flowInsights) && flowInsights.length) {
+    out.push('## Orchestration insights');
+    out.push('');
+    flowInsights.forEach((ins) => {
+      if (!ins) return;
+      out.push(`### ${ins.name}`);
+      out.push('');
+      out.push(`- **Steps**: ${ins.stepCount} · **Components in path**: ${ins.componentCount}`);
+      out.push(`- **Estimated latency**: ~${ins.estimatedLatencyMs}ms`);
+      if (ins.slowest) out.push(`- **Slowest hop**: ${ins.slowest.name} (~${ins.slowest.ms}ms)`);
+      out.push(`- **Sync / Async hops**: ${ins.syncCount} / ${ins.asyncCount}`);
+      out.push(`- **External dependencies in path**: ${ins.externalCount}`);
+      if (ins.fanOuts?.length) {
+        out.push(`- **Fan-out points**: ${ins.fanOuts.map((f) => `${f.fromName} → ${f.targets.join(', ')}`).join('; ')}`);
+      }
+      if (ins.recommendations?.length) {
+        out.push('');
+        out.push('**Recommendations:**');
+        ins.recommendations.forEach((r) => out.push(`- ${r}`));
+      }
+      out.push('');
+    });
+  }
+
+  // Risk assessment
+  if (want('risks', false) && risks && (risks.summary || (risks.items || []).length)) {
+    out.push('## Risk assessment');
+    out.push('');
+    if (risks.summary) {
+      const s = risks.summary;
+      out.push(`**${s.total || (risks.items || []).length}** risk${(s.total || risks.items?.length) === 1 ? '' : 's'} identified — ${s.high || 0} high · ${s.medium || 0} medium · ${s.low || 0} low.`);
+      out.push('');
+    }
+    (risks.items || []).forEach((r) => {
+      const sev = (r.severity || 'medium').toUpperCase();
+      const tgt = r.componentName ? ` (${r.componentName})` : '';
+      out.push(`- **[${sev}]** ${r.title}${tgt} — ${r.recommendation || r.impact || ''}`);
+    });
+    out.push('');
+  }
+
+  // Scenario test results
+  if (want('scenarios', false) && Array.isArray(scenarioResults) && scenarioResults.length) {
+    out.push('## Scenario test results');
+    out.push('');
+    const passed = scenarioResults.filter((s) => s.result?.passed).length;
+    out.push(`**${passed}/${scenarioResults.length}** scenario${scenarioResults.length === 1 ? '' : 's'} pass.`);
+    out.push('');
+    scenarioResults.forEach(({ scenario, result }) => {
+      const icon = result?.passed ? '✓' : '✗';
+      out.push(`### ${icon} ${scenario.name}`);
+      out.push('');
+      if (scenario.description) { out.push(scenario.description); out.push(''); }
+      out.push(`- **Verdict**: ${result?.passed ? 'PASS' : (result?.aborted ? `ABORTED — ${result.abortReason}` : 'FAIL')}`);
+      out.push(`- **Steps executed**: ${result?.trace?.length || 0}`);
+      out.push(`- **Estimated latency**: ~${result?.totalLatencyMs || 0}ms`);
+      if (result?.assertions?.length) {
+        out.push('- **Assertions**:');
+        result.assertions.forEach((a) => {
+          out.push(`  - ${a.passed ? '✓' : '✗'} ${a.label} *(expected ${a.expected}, got ${a.actual})*`);
+        });
+      }
+      out.push('');
+    });
   }
 
   // Custom user-added sections

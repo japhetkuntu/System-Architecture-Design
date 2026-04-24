@@ -671,6 +671,8 @@ export default function App() {
             selectedComponentIds={selection}
             onAutoLayout={() => { b.autoLayout(); showToast('Auto-arranged'); }}
             onResetPositions={() => { b.clearComponentPositions(); showToast('Layout reset'); }}
+            scenarios={b.scenarios}
+            onScenariosChange={b.setScenarios}
             focusMode={focusMode}
             onToggleFocusMode={() => setFocusMode((v) => !v)}
           />
@@ -699,6 +701,8 @@ export default function App() {
           connections: b.connections,
           allTypes: b.allTypes
         })}
+        connections={b.connections}
+        scenarios={b.scenarios}
         filenameBase={filenameBase}
       />
 

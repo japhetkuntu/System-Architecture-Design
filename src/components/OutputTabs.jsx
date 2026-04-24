@@ -3,6 +3,7 @@ import DiagramView from './DiagramView.jsx';
 import MermaidCode from './MermaidCode.jsx';
 import CanvasView from './CanvasView.jsx';
 import StoryView from './StoryView.jsx';
+import ScenarioLab from './ScenarioLab.jsx';
 import { buildAllSequenceDiagrams } from '../utils/uml.js';
 
 /**
@@ -22,6 +23,8 @@ export default function OutputTabs({
   onSelectComponent, onSelectConnection,
   selectedComponentIds,
   onAutoLayout, onResetPositions,
+  // scenario lab
+  scenarios, onScenariosChange,
   // fullscreen / focus mode
   focusMode, onToggleFocusMode
 }) {
@@ -40,6 +43,7 @@ export default function OutputTabs({
   const tabs = [
     { id: 'canvas', label: '🎨 Diagram' },
     ...(components.length > 0 ? [{ id: 'story', label: '🎯 Management view' }] : []),
+    ...(components.length > 0 ? [{ id: 'lab', label: '🧪 Scenario Lab' }] : []),
     ...(sequenceDiagrams.length > 0 ? [{ id: 'sequences', label: `🔄 Sequences (${sequenceDiagrams.length})` }] : []),
     ...(hasBaseline ? [{ id: 'diff', label: '🔍 Diff' }] : []),
     { id: 'code', label: '📄 Mermaid code' }
@@ -49,6 +53,7 @@ export default function OutputTabs({
     if (!hasBaseline && active === 'diff') setActive('canvas');
     if (active === 'sequences' && sequenceDiagrams.length === 0) setActive('canvas');
     if (active === 'story' && components.length === 0) setActive('canvas');
+    if (active === 'lab' && components.length === 0) setActive('canvas');
   }, [hasBaseline, active, sequenceDiagrams.length, components.length]);
 
   // Keep activeFlowId pointed at a real flow.
@@ -159,6 +164,15 @@ export default function OutputTabs({
           />
         )}
         {active === 'code' && <MermaidCode code={active === 'code' ? mermaid : ''} />}
+        {active === 'lab' && components.length > 0 && (
+          <ScenarioLab
+            components={components}
+            connections={connections}
+            allTypes={allTypes}
+            scenarios={scenarios || []}
+            onScenariosChange={onScenariosChange || (() => {})}
+          />
+        )}
       </div>
     </section>
   );
